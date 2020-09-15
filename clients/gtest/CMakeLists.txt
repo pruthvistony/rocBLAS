@@ -45,27 +45,32 @@ set( THREADS_PREFER_PTHREAD_FLAG ON )
 find_package( Threads REQUIRED )
 
 if( BUILD_WITH_TENSILE )
-  set(Tensile_TEST_SRC
+  set(rocblas_tensile_test_source
+      # Keep multiheaded_gtest.cpp first as we want
+      # to allow it to create the first TensileHost !
+      # Current GTESTs are run in the linking order as added with global variables
+      multiheaded_gtest.cpp
+      # use of tensile based functions (gemm)
+      atomics_mode_gtest.cpp
       gemm_gtest.cpp
       trmm_gtest.cpp
       trsm_gtest.cpp
       trsv_gtest.cpp
+      trtri_gtest.cpp
       )
-
-  set(rocblas_test_source
-    ${Tensile_TEST_SRC}
-    geam_gtest.cpp
-    trtri_gtest.cpp
-    )
-endif( )
+endif()
 
 set(rocblas_no_tensile_test_source
     rocblas_gtest_main.cpp
+    rocblas_test.cpp
     set_get_pointer_mode_gtest.cpp
+    set_get_atomics_mode_gtest.cpp
     logging_mode_gtest.cpp
+    ostream_threadsafety_gtest.cpp
     set_get_vector_gtest.cpp
     set_get_matrix_gtest.cpp
     blas1_gtest.cpp
+    blas1_ex_gtest.cpp
     # blas2
     gbmv_gtest.cpp
     gemv_gtest.cpp
@@ -79,6 +84,8 @@ set(rocblas_no_tensile_test_source
     trmv_gtest.cpp
     tpmv_gtest.cpp
     tbmv_gtest.cpp
+    tbsv_gtest.cpp
+    tpsv_gtest.cpp
     ger_gtest.cpp
     geru_gtest.cpp
     gerc_gtest.cpp
@@ -90,10 +97,16 @@ set(rocblas_no_tensile_test_source
     spmv_gtest.cpp
     symv_gtest.cpp
     # blas3
+    hemm_gtest.cpp
     herk_gtest.cpp
     her2k_gtest.cpp
+    herkx_gtest.cpp
+    symm_gtest.cpp
     syrk_gtest.cpp
     syr2k_gtest.cpp
+    syrkx_gtest.cpp
+    geam_gtest.cpp
+    dgmm_gtest.cpp
     )
 
 if(LINK_BLIS)
@@ -101,13 +114,16 @@ if(LINK_BLIS)
 endif()
 
 set( rocblas_benchmark_common
+      ../common/rocblas_arguments.cpp
       ../common/utility.cpp
       ../common/cblas_interface.cpp
       ${BLIS_CPP}
       ../common/rocblas_parse_data.cpp
     )
 
-add_executable( rocblas-test ${rocblas_no_tensile_test_source} ${rocblas_test_source} ${rocblas_benchmark_common} )
+# Keep ${rocblas_tensile_test_source} first, so that multiheaded tests are the
+# first to initialize Tensile.
+add_executable( rocblas-test ${rocblas_tensile_test_source} ${rocblas_no_tensile_test_source} ${rocblas_f90_source} ${rocblas_benchmark_common} )
 
 if( BUILD_WITH_TENSILE )
     target_compile_definitions( rocblas-test PRIVATE BUILD_WITH_TENSILE=1 GOOGLE_TEST )
@@ -119,6 +135,10 @@ endif()
 target_include_directories( rocblas-test
   PRIVATE
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include/blas1>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include/blas2>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include/blas3>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include/blas_ex>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../../library/include>
 )
 
@@ -133,17 +153,23 @@ target_include_directories( rocblas-test
     $<BUILD_INTERFACE:${BLIS_INCLUDE_DIR}>
     )
 
-set( BLIS_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/build/deps/blis/include/blis )
-set( BLIS_LIBRARY ${CMAKE_SOURCE_DIR}/build/deps/blis/lib/libblis.so )
+set( BLIS_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/${BUILD_DIR}/deps/blis/include/blis )
+set( BLIS_LIBRARY ${CMAKE_SOURCE_DIR}/${BUILD_DIR}/deps/blis/lib/libblis.so )
 
 if( OS_ID_rhel OR OS_ID_sles OR OS_ID_centos)
     if( OS_ID_rhel OR OS_ID_centos)
-        if( CXX_VERSION_STRING MATCHES "clang")
-	    set( OPENMP_INCLUDE_DIR /opt/rh/devtoolset-7/root/usr/lib/gcc/x86_64-redhat-linux/7/include )
+        if( EXISTS "/usr/lib/gcc/x86_64-redhat-linux/8/" )
+            set( ROCM_OPENMP_PATH /usr/lib/gcc/x86_64-redhat-linux/8 )
+        else()
+            set( ROCM_OPENMP_PATH /opt/rh/devtoolset-7/root/usr/lib/gcc/x86_64-redhat-linux/7 )
         endif()
+
         # defer OpenMP include as search order must come after clang
-        set( XXX_OPENMP_INCLUDE_DIR /opt/rh/devtoolset-7/root/usr/lib/gcc/x86_64-redhat-linux/7/include )
-        set( OPENMP_LIBRARY /opt/rh/devtoolset-7/root/usr/lib/gcc/x86_64-redhat-linux/7/libgomp.so )
+        set( XXX_OPENMP_INCLUDE_DIR ${ROCM_OPENMP_PATH}/include )
+        set( OPENMP_LIBRARY ${ROCM_OPENMP_PATH}/libgomp.so )
+        if( CXX_VERSION_STRING MATCHES "clang")
+            set( XXX_OPENMP_INCLUDE_DIR ${ROCM_OPENMP_PATH}/include )
+        endif()
     else()
     #SLES
         set( OPENMP_INCLUDE_DIR /usr/lib64/gcc/x86_64-suse-linux/7/include/ )
@@ -151,9 +177,13 @@ if( OS_ID_rhel OR OS_ID_sles OR OS_ID_centos)
     endif()
 
     message(STATUS "RocmPath: ${ROCM_PATH}")
-    if(EXISTS ${ROCM_PATH}/hcc/lib/clang/10.0.0/include/immintrin.h AND CMAKE_CXX_COMPILER MATCHES ".*/hcc$")
+    if(EXISTS ${ROCM_PATH}/llvm/lib/clang/12.0.0/include/immintrin.h AND CMAKE_CXX_COMPILER MATCHES ".*/hcc$|.*/hipcc$" )
+        set( CLANG_INCLUDE_DIR ${ROCM_PATH}/llvm/lib/clang/12.0.0/include )
+    elseif(EXISTS ${ROCM_PATH}/llvm/lib/clang/11.0.0/include/immintrin.h AND CMAKE_CXX_COMPILER MATCHES ".*/hcc$|.*/hipcc$" )
+        set( CLANG_INCLUDE_DIR ${ROCM_PATH}/llvm/lib/clang/11.0.0/include )
+    elseif (EXISTS ${ROCM_PATH}/hcc/lib/clang/10.0.0/include/immintrin.h AND CMAKE_CXX_COMPILER MATCHES ".*/hcc$|.*/hipcc$" )
         set( CLANG_INCLUDE_DIR ${ROCM_PATH}/hcc/lib/clang/10.0.0/include )
-    elseif (EXISTS ${ROCM_PATH}/hcc/lib/clang/9.0.0/include/immintrin.h AND CMAKE_CXX_COMPILER MATCHES ".*/hcc$")
+    elseif (EXISTS ${ROCM_PATH}/hcc/lib/clang/9.0.0/include/immintrin.h AND CMAKE_CXX_COMPILER MATCHES ".*/hcc$|.*/hipcc$" )
         set( CLANG_INCLUDE_DIR ${ROCM_PATH}/hcc/lib/clang/9.0.0/include )
     else()
         set( CLANG_INCLUDE_DIR )
@@ -173,9 +203,9 @@ if( OS_ID_rhel OR OS_ID_sles OR OS_ID_centos)
         )
 
     if(LINK_BLIS)
-      target_link_libraries( rocblas-test PRIVATE ${OPENMP_LIBRARY} ${BLIS_LIBRARY} ${Boost_LIBRARIES} ${GTEST_LIBRARIES} cblas lapack roc::rocblas )
+      target_link_libraries( rocblas-test PRIVATE rocblas_fortran_client roc::rocblas lapack cblas ${BLIS_LIBRARY} ${GTEST_LIBRARIES} ${Boost_LIBRARIES} ${OPENMP_LIBRARY} )
     else()
-      target_link_libraries( rocblas-test PRIVATE ${OPENMP_LIBRARY} ${Boost_LIBRARIES} ${GTEST_LIBRARIES} cblas lapack roc::rocblas )
+      target_link_libraries( rocblas-test PRIVATE rocblas_fortran_client roc::rocblas lapack cblas ${GTEST_LIBRARIES} ${Boost_LIBRARIES} ${OPENMP_LIBRARY} )
     endif()
 else()
     # External header includes included as system files
@@ -189,13 +219,11 @@ else()
         $<BUILD_INTERFACE:${BLIS_INCLUDE_DIR}>
     )
     if(LINK_BLIS)
-      target_link_libraries( rocblas-test PRIVATE ${GTEST_LIBRARIES} ${Boost_LIBRARIES} ${BLIS_LIBRARY} cblas lapack roc::rocblas )
+      target_link_libraries( rocblas-test PRIVATE rocblas_fortran_client roc::rocblas lapack cblas ${BLIS_LIBRARY} ${GTEST_LIBRARIES} ${Boost_LIBRARIES} )
     else()
-      target_link_libraries( rocblas-test PRIVATE ${GTEST_LIBRARIES} ${Boost_LIBRARIES} cblas lapack roc::rocblas )
+      target_link_libraries( rocblas-test PRIVATE rocblas_fortran_client roc::rocblas lapack cblas ${GTEST_LIBRARIES} ${Boost_LIBRARIES} )
     endif()
 endif()
-
-get_target_property( HIPHCC_LOCATION hip::hip_hcc IMPORTED_LOCATION_RELEASE )
 
 if( CUDA_FOUND )
   target_include_directories( rocblas-test
@@ -208,13 +236,13 @@ if( CUDA_FOUND )
 else( )
   # auto set in hip_common.h
   #target_compile_definitions( rocblas-test PRIVATE __HIP_PLATFORM_HCC__ )
-  target_link_libraries( rocblas-test PRIVATE ${HIPHCC_LOCATION})
+  target_link_libraries( rocblas-test PRIVATE hip::host hip::device )
 endif( )
 
 set( ROCBLAS_TEST_DATA "${PROJECT_BINARY_DIR}/staging/rocblas_gtest.data")
 add_custom_command( OUTPUT "${ROCBLAS_TEST_DATA}"
                     COMMAND ../common/rocblas_gentest.py -I ../include rocblas_gtest.yaml -o "${ROCBLAS_TEST_DATA}"
-                    DEPENDS ../common/rocblas_gentest.py ../include/rocblas_common.yaml *.yaml
+                    DEPENDS ../common/rocblas_gentest.py ../include/rocblas_common.yaml blas1_gtest.yaml dgmm_gtest.yaml gbmv_gtest.yaml geam_gtest.yaml gemm_batched_gtest.yaml gemm_gtest.yaml gemm_strided_batched_gtest.yaml gemv_gtest.yaml ger_gtest.yaml geruc_gtest.yaml hbmv_gtest.yaml hemm_gtest.yaml hemv_gtest.yaml her2_gtest.yaml her2k_gtest.yaml her_gtest.yaml herk_gtest.yaml herkx_gtest.yaml hpmv_gtest.yaml hpr2_gtest.yaml hpr_gtest.yaml known_bugs.yaml logging_mode_gtest.yaml atomics_mode_gtest.yaml ostream_threadsafety_gtest.yaml rocblas_gtest.yaml sbmv_gtest.yaml set_get_matrix_gtest.yaml set_get_pointer_mode_gtest.yaml set_get_atomics_mode_gtest.yaml set_get_vector_gtest.yaml spmv_gtest.yaml spr2_gtest.yaml spr_gtest.yaml symm_gtest.yaml symv_gtest.yaml syr2_gtest.yaml syr2k_gtest.yaml syr_gtest.yaml syrk_gtest.yaml syrkx_gtest.yaml tbmv_gtest.yaml tbsv_gtest.yaml tpmv_gtest.yaml tpsv_gtest.yaml trmm_gtest.yaml trmv_gtest.yaml trsm_gtest.yaml trsv_gtest.yaml trtri_gtest.yaml multiheaded_gtest.yaml
                     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" )
 add_custom_target( rocblas-test-data
                    DEPENDS "${ROCBLAS_TEST_DATA}" )
@@ -232,7 +260,10 @@ elseif( CMAKE_COMPILER_IS_GNUCXX OR CXX_VERSION_STRING MATCHES "clang" )
 endif( )
 
 if( CXX_VERSION_STRING MATCHES "clang" )
-  target_link_libraries( rocblas-test PRIVATE -lpthread -lm -stdlib=libstdc++ ${ROCM_PATH}/lib/libclang_rt.builtins-x86_64.a )
+  target_link_libraries( rocblas-test PRIVATE -lpthread -lstdc++ -lm )
+  if(OS_ID_rhel OR OS_ID_centos)
+    set(CMAKE_CXX_FLAGS "-isystem ${CLANG_INCLUDE_DIR} -isystem ${XXX_OPENMP_INCLUDE_DIR} ${CMAKE_CXX_FLAGS}")
+  endif( )
 else( )
   if(OS_ID_rhel OR OS_ID_centos)
     set(CMAKE_CXX_FLAGS "-isystem ${CLANG_INCLUDE_DIR} -isystem ${XXX_OPENMP_INCLUDE_DIR} ${CMAKE_CXX_FLAGS}")
@@ -242,3 +273,4 @@ endif( )
 
 set_target_properties( rocblas-test PROPERTIES CXX_EXTENSIONS NO )
 set_target_properties( rocblas-test PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/staging" )
+target_compile_definitions( rocblas-test PRIVATE ROCM_USE_FLOAT16 )

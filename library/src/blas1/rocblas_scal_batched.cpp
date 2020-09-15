@@ -1,11 +1,11 @@
 /* ************************************************************************
  * Copyright 2016-2020 Advanced Micro Devices, Inc.
  * ************************************************************************ */
-#include "handle.h"
-#include "logging.h"
+#include "handle.hpp"
+#include "logging.hpp"
 #include "rocblas.h"
 #include "rocblas_scal.hpp"
-#include "utility.h"
+#include "utility.hpp"
 
 namespace
 {
@@ -34,8 +34,6 @@ namespace
     {
         if(!handle)
             return rocblas_status_invalid_handle;
-        if(!alpha)
-            return rocblas_status_invalid_pointer;
 
         auto layer_mode = handle->layer_mode;
         if(handle->pointer_mode == rocblas_pointer_mode_host)
@@ -49,7 +47,7 @@ namespace
             // ANSWER: -r is syntatic sugar; the types can be specified separately
             if(layer_mode & rocblas_layer_mode_log_bench)
             {
-                std::stringstream alphass;
+                rocblas_ostream alphass;
                 alphass << "--alpha " << std::real(*alpha)
                         << (std::imag(*alpha) != 0
                                 ? (" --alphai " + std::to_string(std::imag(*alpha)))
@@ -77,10 +75,10 @@ namespace
             log_profile(
                 handle, rocblas_scal_name<T, U>, "N", n, "incx", incx, "batch_count", batch_count);
 
-        if(!x)
+        if(n <= 0 || incx <= 0 || batch_count <= 0)
+            return rocblas_status_success;
+        if(!x || !alpha)
             return rocblas_status_invalid_pointer;
-        if(batch_count < 0)
-            return rocblas_status_invalid_size;
 
         return rocblas_scal_template<NB, T>(handle, n, alpha, 0, x, 0, incx, 0, batch_count);
     }

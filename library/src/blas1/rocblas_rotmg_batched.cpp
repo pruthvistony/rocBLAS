@@ -1,11 +1,11 @@
 /* ************************************************************************
  * Copyright 2016-2020 Advanced Micro Devices, Inc.
  * ************************************************************************ */
-#include "handle.h"
-#include "logging.h"
+#include "handle.hpp"
+#include "logging.hpp"
 #include "rocblas.h"
 #include "rocblas_rotmg.hpp"
-#include "utility.h"
+#include "utility.hpp"
 
 namespace
 {
@@ -28,6 +28,8 @@ namespace
         if(!handle)
             return rocblas_status_invalid_handle;
 
+        RETURN_ZERO_DEVICE_MEMORY_SIZE_IF_QUERIED(handle);
+
         auto layer_mode = handle->layer_mode;
         if(layer_mode & rocblas_layer_mode_log_trace)
             log_trace(handle, rocblas_rotmg_name<T>, d1, d2, x1, y1, param, batch_count);
@@ -40,12 +42,10 @@ namespace
         if(layer_mode & rocblas_layer_mode_log_profile)
             log_profile(handle, rocblas_rotmg_name<T>, "batch_count", batch_count);
 
+        if(batch_count <= 0)
+            return rocblas_status_success;
         if(!d1 || !d2 || !x1 || !y1 || !param)
             return rocblas_status_invalid_pointer;
-        if(batch_count < 0)
-            return rocblas_status_invalid_size;
-
-        RETURN_ZERO_DEVICE_MEMORY_SIZE_IF_QUERIED(handle);
 
         return rocblas_rotmg_template(
             handle, d1, 0, 0, d2, 0, 0, x1, 0, 0, y1, 0, 0, param, 0, 0, batch_count);

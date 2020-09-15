@@ -2,25 +2,15 @@
  * Copyright 2016-2020 Advanced Micro Devices, Inc.
  *
  * ************************************************************************ */
-#include "handle.h"
-#include "logging.h"
+#include "handle.hpp"
+#include "logging.hpp"
 #include "rocblas-auxiliary.h"
-#include "rocblas-types.h"
-#include "utility.h"
-#include <cstdio>
+#include <cctype>
+#include <cstdlib>
 #include <memory>
+#include <string>
 
 /* ============================================================================================ */
-
-/*******************************************************************************
- * ! \brief  Initialize rocBLAS, to avoid costly startup time at the first call.
- ******************************************************************************/
-
-extern "C" void rocblas_init()
-{
-    static rocblas_handle handle;
-    static int            dummy = (rocblas_create_handle(&handle), 0);
-}
 
 /*******************************************************************************
  * ! \brief  indicates whether the pointer is on the host or device.
@@ -31,10 +21,7 @@ extern "C" rocblas_pointer_mode rocblas_pointer_to_mode(void* ptr)
 {
     hipPointerAttribute_t attribute;
     hipPointerGetAttributes(&attribute, ptr);
-    if(ptr == attribute.devicePointer)
-        return rocblas_pointer_mode_device;
-    else
-        return rocblas_pointer_mode_host;
+    return ptr == attribute.devicePointer ? rocblas_pointer_mode_device : rocblas_pointer_mode_host;
 }
 
 /*******************************************************************************
@@ -77,6 +64,45 @@ catch(...)
 }
 
 /*******************************************************************************
+ * ! \brief get atomics mode
+ ******************************************************************************/
+extern "C" rocblas_status rocblas_get_atomics_mode(rocblas_handle        handle,
+                                                   rocblas_atomics_mode* mode)
+try
+{
+    // if handle not valid
+    if(!handle)
+        return rocblas_status_invalid_handle;
+    *mode = handle->atomics_mode;
+    if(handle->layer_mode & rocblas_layer_mode_log_trace)
+        log_trace(handle, "rocblas_get_atomics_mode", *mode);
+    return rocblas_status_success;
+}
+catch(...)
+{
+    return exception_to_rocblas_status();
+}
+
+/*******************************************************************************
+ * ! \brief set atomics mode
+ ******************************************************************************/
+extern "C" rocblas_status rocblas_set_atomics_mode(rocblas_handle handle, rocblas_atomics_mode mode)
+try
+{
+    // if handle not valid
+    if(!handle)
+        return rocblas_status_invalid_handle;
+    if(handle->layer_mode & rocblas_layer_mode_log_trace)
+        log_trace(handle, "rocblas_set_atomics_mode", mode);
+    handle->atomics_mode = mode;
+    return rocblas_status_success;
+}
+catch(...)
+{
+    return exception_to_rocblas_status();
+}
+
+/*******************************************************************************
  * ! \brief create rocblas handle called before any rocblas library routines
  ******************************************************************************/
 extern "C" rocblas_status rocblas_create_handle(rocblas_handle* handle)
@@ -87,7 +113,7 @@ try
         return rocblas_status_invalid_handle;
 
     // allocate on heap
-    *handle = new _rocblas_handle();
+    *handle = new _rocblas_handle;
 
     if((*handle)->layer_mode & rocblas_layer_mode_log_trace)
         log_trace(*handle, "rocblas_create_handle");
@@ -133,7 +159,9 @@ try
         return rocblas_status_invalid_handle;
     if(handle->layer_mode & rocblas_layer_mode_log_trace)
         log_trace(handle, "rocblas_set_stream", stream_id);
-    return handle->set_stream(stream_id);
+    RETURN_IF_HIP_ERROR(hipStreamSynchronize(handle->rocblas_stream));
+    handle->rocblas_stream = stream_id;
+    return rocblas_status_success;
 }
 catch(...)
 {
@@ -150,9 +178,12 @@ try
     // if handle not valid
     if(!handle)
         return rocblas_status_invalid_handle;
+    if(!stream_id)
+        return rocblas_status_invalid_pointer;
     if(handle->layer_mode & rocblas_layer_mode_log_trace)
         log_trace(handle, "rocblas_get_stream", *stream_id);
-    return handle->get_stream(stream_id);
+    *stream_id = handle->rocblas_stream;
+    return rocblas_status_success;
 }
 catch(...)
 {
@@ -167,12 +198,12 @@ catch(...)
 constexpr size_t      VEC_BUFF_MAX_BYTES = 1048576;
 constexpr rocblas_int NB_X               = 256;
 
-__global__ void copy_void_ptr_vector_kernel(rocblas_int n,
-                                            rocblas_int elem_size,
-                                            const void* x,
-                                            rocblas_int incx,
-                                            void*       y,
-                                            rocblas_int incy)
+__global__ void rocblas_copy_void_ptr_vector_kernel(rocblas_int n,
+                                                    rocblas_int elem_size,
+                                                    const void* x,
+                                                    rocblas_int incx,
+                                                    void*       y,
+                                                    rocblas_int incy)
 {
     size_t tid = hipBlockIdx_x * hipBlockDim_x + hipThreadIdx_x;
     if(tid < n)
@@ -270,7 +301,7 @@ try
                 // host buffer -> device buffer
                 PRINT_IF_HIP_ERROR(hipMemcpy(t_d, t_h, contig_size, hipMemcpyHostToDevice));
                 // device buffer -> non-contiguous device vector
-                hipLaunchKernelGGL(copy_void_ptr_vector_kernel,
+                hipLaunchKernelGGL(rocblas_copy_void_ptr_vector_kernel,
                                    grid,
                                    threads,
                                    0,
@@ -292,7 +323,7 @@ try
                 // contiguous host vector -> device buffer
                 PRINT_IF_HIP_ERROR(hipMemcpy(t_d, x_h_start, contig_size, hipMemcpyHostToDevice));
                 // device buffer -> non-contiguous device vector
-                hipLaunchKernelGGL(copy_void_ptr_vector_kernel,
+                hipLaunchKernelGGL(rocblas_copy_void_ptr_vector_kernel,
                                    grid,
                                    threads,
                                    0,
@@ -389,7 +420,7 @@ try
                 if(!t_d)
                     return rocblas_status_memory_error;
                 // non-contiguous device vector -> device buffer
-                hipLaunchKernelGGL(copy_void_ptr_vector_kernel,
+                hipLaunchKernelGGL(rocblas_copy_void_ptr_vector_kernel,
                                    grid,
                                    threads,
                                    0,
@@ -436,7 +467,7 @@ try
                 if(!t_d)
                     return rocblas_status_memory_error;
                 // non-contiguous device vector -> device buffer
-                hipLaunchKernelGGL(copy_void_ptr_vector_kernel,
+                hipLaunchKernelGGL(rocblas_copy_void_ptr_vector_kernel,
                                    grid,
                                    threads,
                                    0,
@@ -554,13 +585,13 @@ constexpr size_t      MAT_BUFF_MAX_BYTES = 1048576;
 constexpr rocblas_int MATRIX_DIM_X       = 128;
 constexpr rocblas_int MATRIX_DIM_Y       = 8;
 
-__global__ void copy_void_ptr_matrix_kernel(rocblas_int rows,
-                                            rocblas_int cols,
-                                            size_t      elem_size,
-                                            const void* a,
-                                            rocblas_int lda,
-                                            void*       b,
-                                            rocblas_int ldb)
+__global__ void rocblas_copy_void_ptr_matrix_kernel(rocblas_int rows,
+                                                    rocblas_int cols,
+                                                    size_t      elem_size,
+                                                    const void* a,
+                                                    rocblas_int lda,
+                                                    void*       b,
+                                                    rocblas_int ldb)
 {
     rocblas_int tx = hipBlockIdx_x * hipBlockDim_x + hipThreadIdx_x;
     rocblas_int ty = hipBlockIdx_y * hipBlockDim_y + hipThreadIdx_y;
@@ -660,7 +691,7 @@ try
                 // host buffer -> device buffer
                 PRINT_IF_HIP_ERROR(hipMemcpy(t_d, t_h, contig_size, hipMemcpyHostToDevice));
                 // device buffer -> non-contiguous device matrix
-                hipLaunchKernelGGL(copy_void_ptr_matrix_kernel,
+                hipLaunchKernelGGL(rocblas_copy_void_ptr_matrix_kernel,
                                    grid,
                                    threads,
                                    0,
@@ -683,7 +714,7 @@ try
                 // contiguous host matrix -> device buffer
                 PRINT_IF_HIP_ERROR(hipMemcpy(t_d, a_h_start, contig_size, hipMemcpyHostToDevice));
                 // device buffer -> non-contiguous device matrix
-                hipLaunchKernelGGL(copy_void_ptr_matrix_kernel,
+                hipLaunchKernelGGL(rocblas_copy_void_ptr_matrix_kernel,
                                    grid,
                                    threads,
                                    0,
@@ -799,7 +830,7 @@ try
                 if(!t_d)
                     return rocblas_status_memory_error;
                 // non-contiguous device matrix -> device buffer
-                hipLaunchKernelGGL(copy_void_ptr_matrix_kernel,
+                hipLaunchKernelGGL(rocblas_copy_void_ptr_matrix_kernel,
                                    grid,
                                    threads,
                                    0,
@@ -846,7 +877,7 @@ try
                 if(!t_d)
                     return rocblas_status_memory_error;
                 // non-contiguous device matrix -> device buffer
-                hipLaunchKernelGGL(copy_void_ptr_matrix_kernel,
+                hipLaunchKernelGGL(rocblas_copy_void_ptr_matrix_kernel,
                                    grid,
                                    threads,
                                    0,
@@ -991,4 +1022,73 @@ extern "C" const char* rocblas_status_to_string(rocblas_status status)
     // We don't use default: so that the compiler warns us if any valid enums are missing
     // from our switch. If the value is not a valid rocblas_status, we return this string.
     return "<undefined rocblas_status value>";
+}
+
+/*******************************************************************************
+ * Function to set start/stop event handlers (for internal use only)
+ ******************************************************************************/
+extern "C" rocblas_status rocblas_set_start_stop_events(rocblas_handle handle,
+                                                        hipEvent_t     startEvent,
+                                                        hipEvent_t     stopEvent)
+{
+    if(!handle)
+        return rocblas_status_invalid_handle;
+    handle->startEvent = startEvent;
+    handle->stopEvent  = stopEvent;
+    return rocblas_status_success;
+}
+
+/*******************************************************************************
+ * GPU architecture-related functions
+ ******************************************************************************/
+
+// Emulate C++17 std::void_t
+template <typename...>
+using void_t = void;
+
+// By default, use gcnArch converted to a string prepended by gfx
+template <typename PROP, typename = void>
+struct ArchName
+{
+    std::string operator()(const PROP& prop)
+    {
+        return "gfx" + std::to_string(prop.gcnArch);
+    }
+};
+
+// If gcnArchName exists as a member, use it instead
+template <typename PROP>
+struct ArchName<PROP, void_t<decltype(PROP::gcnArchName)>>
+{
+    std::string operator()(const PROP& prop)
+    {
+        return prop.gcnArchName;
+    }
+};
+
+// Get architecture name
+std::string rocblas_get_arch_name()
+{
+    int deviceId;
+    hipGetDevice(&deviceId);
+    hipDeviceProp_t deviceProperties;
+    hipGetDeviceProperties(&deviceProperties, deviceId);
+    return ArchName<hipDeviceProp_t>{}(deviceProperties);
+}
+
+// Whether Tensile supports ldc != ldd
+// We parse the GPU architecture name, skipping any initial letters (e.g., "gfx")
+// If there are not three or more characters after the initial letters, we assume false
+// If there are more than 3 characters or any non-digits after the initial letters, we assume true
+// Otherwise we assume true iff the value is greater than or equal to 906
+
+bool rocblas_tensile_supports_ldc_ne_ldd()
+{
+    std::string arch_name = rocblas_get_arch_name();
+    const char* name      = arch_name.c_str();
+    while(isalpha(*name))
+        ++name;
+    return name[0] && name[1] && name[2]
+           && (name[3] || !isdigit(name[0]) || !isdigit(name[1]) || !isdigit(name[2])
+               || atoi(name) >= 906);
 }

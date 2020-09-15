@@ -126,7 +126,7 @@ public:
     //!
     //! @brief Cast to a double pointer.
     //!
-    operator T**()
+    operator T* *()
     {
         return this->m_data;
     }
@@ -134,7 +134,7 @@ public:
     //!
     //! @brief Constant cast to a double pointer.
     //!
-    operator const T* const*()
+    operator const T* const *()
     {
         return this->m_data;
     }
@@ -241,7 +241,7 @@ private:
 //! @param that That host batch vector.
 //!
 template <typename T>
-std::ostream& operator<<(std::ostream& os, const host_batch_vector<T>& that)
+rocblas_ostream& operator<<(rocblas_ostream& os, const host_batch_vector<T>& that)
 {
     auto n           = that.n();
     auto inc         = std::abs(that.inc());

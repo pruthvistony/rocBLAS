@@ -205,9 +205,9 @@ double norm_check_general(char           norm_type,
                           rocblas_int    N,
                           rocblas_int    lda,
                           rocblas_stride stride_a,
-                          rocblas_int    batch_count,
                           VEC<T_hpa>&    hCPU,
-                          T*             hGPU)
+                          T*             hGPU,
+                          rocblas_int    batch_count)
 {
     // norm type can be O', 'I', 'F', 'o', 'i', 'f' for one, infinity or Frobenius norm
     // one norm is max column sum
@@ -239,14 +239,15 @@ double norm_check_general(char           norm_type,
 }
 
 /* ============== Norm Check for batched case ============= */
+
 template <typename T, typename T_hpa>
-double norm_check_general(char               norm_type,
-                          rocblas_int        M,
-                          rocblas_int        N,
-                          rocblas_int        lda,
-                          rocblas_int        batch_count,
-                          host_vector<T_hpa> hCPU[],
-                          host_vector<T>     hGPU[])
+double norm_check_general(char                      norm_type,
+                          rocblas_int               M,
+                          rocblas_int               N,
+                          rocblas_int               lda,
+                          host_batch_vector<T_hpa>& hCPU,
+                          host_batch_vector<T>&     hGPU,
+                          rocblas_int               batch_count)
 {
     // norm type can be O', 'I', 'F', 'o', 'i', 'f' for one, infinity or Frobenius norm
     // one norm is max column sum
@@ -282,9 +283,9 @@ double norm_check_general(char        norm_type,
                           rocblas_int M,
                           rocblas_int N,
                           rocblas_int lda,
-                          rocblas_int batch_count,
                           T*          hCPU[],
-                          T*          hGPU[])
+                          T*          hGPU[],
+                          rocblas_int batch_count)
 {
     // norm type can be O', 'I', 'F', 'o', 'i', 'f' for one, infinity or Frobenius norm
     // one norm is max column sum
@@ -316,7 +317,7 @@ double norm_check_general(char        norm_type,
 }
 
 /* ============== Norm Check for Symmetric Matrix ============= */
-/*! \brief compare the norm error of two hermitian/symmetric matrices hCPU & hGPU */
+/*! \brief compare the norm error of two Hermitian/symmetric matrices hCPU & hGPU */
 template <typename T, std::enable_if_t<!is_complex<T>, int> = 0>
 double norm_check_symmetric(
     char norm_type, char uplo, rocblas_int N, rocblas_int lda, T* hCPU, T* hGPU)

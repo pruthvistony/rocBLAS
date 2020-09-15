@@ -1,9 +1,9 @@
 /* ************************************************************************
  * Copyright 2016-2020 Advanced Micro Devices, Inc.
  * ************************************************************************ */
-#include "logging.h"
+#include "logging.hpp"
 #include "rocblas_swap.hpp"
-#include "utility.h"
+#include "utility.hpp"
 
 namespace
 {
@@ -60,11 +60,8 @@ namespace
                         batch_count);
 
         // Quick return if possible.
-        if(n <= 0 || batch_count == 0)
+        if(n <= 0 || batch_count <= 0)
             return rocblas_status_success;
-
-        if(batch_count < 0)
-            return rocblas_status_invalid_size;
 
         if(!x || !y)
             return rocblas_status_invalid_pointer;

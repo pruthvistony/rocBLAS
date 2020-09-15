@@ -1,11 +1,11 @@
 /* ************************************************************************
  * Copyright 2016-2020 Advanced Micro Devices, Inc.
  * ************************************************************************ */
-#include "handle.h"
-#include "logging.h"
+#include "handle.hpp"
+#include "logging.hpp"
 #include "rocblas.h"
 #include "rocblas_copy.hpp"
-#include "utility.h"
+#include "utility.hpp"
 
 namespace
 {
@@ -64,6 +64,11 @@ namespace
                         incy,
                         "batch_count",
                         batch_count);
+
+        if(n <= 0 || batch_count <= 0)
+            return rocblas_status_success;
+        if(!x || !y)
+            return rocblas_status_invalid_pointer;
 
         return rocblas_copy_template<false, NB>(
             handle, n, x, 0, incx, 0, y, 0, incy, 0, batch_count);

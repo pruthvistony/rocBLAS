@@ -4,9 +4,6 @@
 #ifndef __ROCBLAS_GBMV_HPP__
 #define __ROCBLAS_GBMV_HPP__
 #include "../blas1/rocblas_copy.hpp"
-#include "handle.h"
-#include "rocblas.h"
-#include "utility.h"
 
 /**
   *  Helper for the non-transpose case. Iterates through each diagonal
@@ -215,7 +212,7 @@ __global__ void gbmvx_kernel(rocblas_operation transA,
                              W                 ya,
                              ptrdiff_t         shifty,
                              rocblas_int       incy,
-                             rocblas_int       stridey)
+                             rocblas_stride    stridey)
 {
     rocblas_int num_threads = hipBlockDim_x * hipBlockDim_y * hipBlockDim_z;
     if(DIM_X * DIM_Y != num_threads)
@@ -278,6 +275,9 @@ rocblas_status rocblas_gbmv_template(rocblas_handle    handle,
     dim3                 gbmvx_threads(GBMVX_DIM_X, GBMVX_DIM_Y);
     const bool           trans = transA == rocblas_operation_none;
     const bool           conj  = transA == rocblas_operation_conjugate_transpose;
+
+    // Temporarily change the thread's default device ID to the handle's device ID
+    auto saved_device_id = handle->push_device_id();
 
     // Launch a modified gemv kernel. The logic is similar to gemv just with modified
     // indices for the banded matrices.

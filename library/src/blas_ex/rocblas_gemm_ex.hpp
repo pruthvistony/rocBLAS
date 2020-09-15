@@ -9,24 +9,23 @@
 #include "TensileTypes.h"
 #endif
 #include "gemm.hpp"
-#include "handle.h"
-#include "logging.h"
-#include "rocblas.h"
-#include "utility.h"
+#include "handle.hpp"
+#include "logging.hpp"
 
 /////////////////
 // Device Side //
 /////////////////
 template <typename To>
-static rocblas_status device_strided_batched_matrix_copy(const To*      src,
-                                                         rocblas_stride ld_src,
-                                                         rocblas_stride stride_src,
-                                                         To*            dst,
-                                                         rocblas_stride ld_dst,
-                                                         rocblas_stride stride_dst,
-                                                         rocblas_int    n1,
-                                                         rocblas_int    n2,
-                                                         rocblas_int    batch_count)
+rocblas_status device_strided_batched_matrix_copy(rocblas_handle handle,
+                                                  const To*      src,
+                                                  rocblas_stride ld_src,
+                                                  rocblas_stride stride_src,
+                                                  To*            dst,
+                                                  rocblas_stride ld_dst,
+                                                  rocblas_stride stride_dst,
+                                                  rocblas_int    n1,
+                                                  rocblas_int    n2,
+                                                  rocblas_int    batch_count)
 {
     if(src == dst && ld_src == ld_dst && stride_src == stride_dst)
         return rocblas_status_success; // no copy if src matrix == dst matrix
@@ -34,27 +33,32 @@ static rocblas_status device_strided_batched_matrix_copy(const To*      src,
     if(n1 == ld_src && n1 == ld_dst && stride_src == n2 * ld_src && stride_dst == n2 * ld_dst)
     {
         // src and dst batch matrices are contiguous, use single copy
-        RETURN_IF_HIP_ERROR(
-            hipMemcpy(dst, src, sizeof(To) * n1 * n2 * batch_count, hipMemcpyDeviceToDevice));
+        RETURN_IF_HIP_ERROR(hipMemcpyAsync(dst,
+                                           src,
+                                           sizeof(To) * n1 * n2 * batch_count,
+                                           hipMemcpyDeviceToDevice,
+                                           handle->rocblas_stream));
     }
     else if(n1 == ld_src && n1 == ld_dst)
     {
         // individual matrices in batch matrix are contiguous, one copy for each matrix
         for(size_t i3 = 0; i3 < batch_count; i3++)
-            RETURN_IF_HIP_ERROR(hipMemcpy(dst + i3 * stride_dst,
-                                          src + i3 * stride_src,
-                                          sizeof(To) * n1 * n2,
-                                          hipMemcpyDeviceToDevice));
+            RETURN_IF_HIP_ERROR(hipMemcpyAsync(dst + i3 * stride_dst,
+                                               src + i3 * stride_src,
+                                               sizeof(To) * n1 * n2,
+                                               hipMemcpyDeviceToDevice,
+                                               handle->rocblas_stream));
     }
     else
     {
         // individual matrices not contiguous, one copy for each contiguous column
         for(int i3 = 0; i3 < batch_count; i3++)
             for(int i2 = 0; i2 < n2; i2++)
-                RETURN_IF_HIP_ERROR(hipMemcpy(dst + i2 * ld_dst + i3 * stride_dst,
-                                              src + i2 * ld_src + i3 * stride_src,
-                                              sizeof(To) * n1,
-                                              hipMemcpyDeviceToDevice));
+                RETURN_IF_HIP_ERROR(hipMemcpyAsync(dst + i2 * ld_dst + i3 * stride_dst,
+                                                   src + i2 * ld_src + i3 * stride_src,
+                                                   sizeof(To) * n1,
+                                                   hipMemcpyDeviceToDevice,
+                                                   handle->rocblas_stream));
     }
     return rocblas_status_success;
 }
@@ -159,7 +163,7 @@ inline TensileStatus tensile_Cijk_Alik_Bjlk_B<tensile_bfloat16, tensile_bfloat16
 #define TENSILE_OUT_ARGS_HALF                                                                      \
     dataD, dataC, dataA, dataB, alpha_half, beta_half, strideD1J, strideD2K, strideC1J, strideC2K, \
         strideA1L, strideA2K, strideB1J, strideB2K, sizeI, sizeJ, sizeK, sizeL, stream, 0,         \
-        nullptr, nullptr
+        startEvent, stopEvent
 
 template <>
 inline TensileStatus tensile_Cijk_Ailk_Bljk_B<TensileHalf, TensileHalf, float>(
@@ -508,8 +512,8 @@ inline TensileStatus call_tensile_ex(To*            dataD,
                                      size_t         sizeL,
                                      hipStream_t    stream,
                                      transpose_mode transposeMode,
-                                     hipEvent_t*    startEvent = nullptr,
-                                     hipEvent_t*    stopEvent  = nullptr)
+                                     hipEvent_t*    startEvent,
+                                     hipEvent_t*    stopEvent)
 {
     switch(transposeMode)
     {
@@ -572,21 +576,19 @@ rocblas_status gemm_ex_batched_template(rocblas_handle    handle,
                                         size_t            offset_d,
                                         rocblas_int       ldd,
                                         rocblas_stride    stride_d,
-                                        rocblas_int       batch_count,
-                                        hipEvent_t*       startEvent = nullptr,
-                                        hipEvent_t*       stopEvent  = nullptr)
+                                        rocblas_int       batch_count)
 {
     // BATCHED VERSION
     // Host arrays of device pointers.
-    Ti* hostA[batch_count];
-    Ti* hostB[batch_count];
-    To* hostC[batch_count];
-    To* hostD[batch_count];
+    auto hostA = std::make_unique<Ti*[]>(batch_count);
+    auto hostB = std::make_unique<Ti*[]>(batch_count);
+    auto hostC = std::make_unique<To*[]>(batch_count);
+    auto hostD = std::make_unique<To*[]>(batch_count);
 
-    RETURN_IF_HIP_ERROR(hipMemcpy(hostA, a, sizeof(hostA), hipMemcpyDeviceToHost));
-    RETURN_IF_HIP_ERROR(hipMemcpy(hostB, b, sizeof(hostB), hipMemcpyDeviceToHost));
-    RETURN_IF_HIP_ERROR(hipMemcpy(hostC, c, sizeof(hostC), hipMemcpyDeviceToHost));
-    RETURN_IF_HIP_ERROR(hipMemcpy(hostD, d, sizeof(hostD), hipMemcpyDeviceToHost));
+    RETURN_IF_HIP_ERROR(hipMemcpy(&hostA[0], a, sizeof(Ti*) * batch_count, hipMemcpyDeviceToHost));
+    RETURN_IF_HIP_ERROR(hipMemcpy(&hostB[0], b, sizeof(Ti*) * batch_count, hipMemcpyDeviceToHost));
+    RETURN_IF_HIP_ERROR(hipMemcpy(&hostC[0], c, sizeof(To*) * batch_count, hipMemcpyDeviceToHost));
+    RETURN_IF_HIP_ERROR(hipMemcpy(&hostD[0], d, sizeof(To*) * batch_count, hipMemcpyDeviceToHost));
 
     stride_a = rocblas_stride(lda) * (trans_a == rocblas_operation_none ? k : m);
     stride_b = rocblas_stride(ldb) * (trans_b == rocblas_operation_none ? n : k);
@@ -621,10 +623,11 @@ rocblas_status gemm_ex_batched_template(rocblas_handle    handle,
                                           offset_d,
                                           ldd,
                                           stride_d,
-                                          1,
-                                          startEvent,
-                                          stopEvent);
-        if(status != rocblas_status_success)
+                                          1);
+
+        if(handle->is_device_memory_size_query()
+               ? status != rocblas_status_size_increased && status != rocblas_status_size_unchanged
+               : status != rocblas_status_success)
             break;
     }
     return status;
@@ -655,21 +658,22 @@ rocblas_status gemm_ex_batched_template(rocblas_handle    handle,
                                         size_t            offset_d,
                                         rocblas_int       ldd,
                                         rocblas_stride    stride_d,
-                                        rocblas_int       batch_count,
-                                        hipEvent_t*       startEvent = nullptr,
-                                        hipEvent_t*       stopEvent  = nullptr)
+                                        rocblas_int       batch_count)
 {
+    // Temporarily change the thread's default device ID to the handle's device ID
+    auto saved_device_id = handle->push_device_id();
+
     a += offset_a;
     b += offset_b;
     c += offset_c;
     d += offset_d;
 
-    static const bool arch_lt906 = handle->device_arch_id() < 906;
-    const To*         c_in;
-    rocblas_int       ldi;
-    rocblas_stride    stride_i;
+    const To*      c_in;
+    rocblas_int    ldi;
+    rocblas_stride stride_i;
 
-    if(!arch_lt906 && (std::is_same<Ti, float>{} || std::is_same<Ti, double>{})
+    if(rocblas_tensile_supports_ldc_ne_ldd()
+       && (std::is_same<Ti, float>{} || std::is_same<Ti, double>{})
        && ((ldc >= ldd && (stride_c >= stride_d || batch_count == 1) && m == ldd)
            || (ldc == ldd && (stride_c == stride_d || batch_count == 1))))
     {
@@ -679,7 +683,8 @@ rocblas_status gemm_ex_batched_template(rocblas_handle    handle,
     }
     else
     {
-        device_strided_batched_matrix_copy(c, ldc, stride_c, d, ldd, stride_d, m, n, batch_count);
+        device_strided_batched_matrix_copy(
+            handle, c, ldc, stride_c, d, ldd, stride_d, m, n, batch_count);
         c_in     = d;
         ldi      = ldd;
         stride_i = stride_d;
@@ -691,10 +696,7 @@ rocblas_status gemm_ex_batched_template(rocblas_handle    handle,
         handle, trans_a,  trans_b, m,    n,   k,        alpha, a,   lda,      stride_a,   b,
         ldb,    stride_b, beta,    c_in, ldi, stride_i, d,     ldd, stride_d, batch_count};
 
-    if(startEvent && stopEvent)
-        return handle->host->runContractionProblem(problem, startEvent, stopEvent);
-    else
-        return handle->host->runContractionProblem(problem);
+    return runContractionProblem(problem);
 
 #else // USE_TENSILE_HOST
 
@@ -721,8 +723,8 @@ rocblas_status gemm_ex_batched_template(rocblas_handle    handle,
                                            k,
                                            handle->rocblas_stream,
                                            GetTransposeMode(trans_a, trans_b),
-                                           startEvent,
-                                           stopEvent);
+                                           &handle->startEvent,
+                                           &handle->stopEvent);
 
     rb_status = (t_status == tensileStatusSuccess) ? rocblas_status_success
                                                    : rocblas_status_internal_error;
@@ -756,22 +758,11 @@ rocblas_status gemm_ex_typecasting(rocblas_handle    handle,
                                    rocblas_int       offsetDin,
                                    rocblas_int       ldd,
                                    rocblas_stride    stride_d,
-                                   rocblas_int       batch_count,
-                                   void*             startEvent = nullptr,
-                                   void*             stopEvent  = nullptr)
+                                   rocblas_int       batch_count)
 {
     Tc alpha_h, beta_h;
-
-    // Right now Tensile requires alpha and beta to be passed by value on host.
-    // If in device pointer mode, copy alpha and beta to host.
-    // TODO: Make this asynchronous, putting synchronization in closer to Tensile call.
-    if(handle->pointer_mode == rocblas_pointer_mode_device)
-    {
-        RETURN_IF_HIP_ERROR(hipMemcpy(&alpha_h, alpha, sizeof(Tc), hipMemcpyDeviceToHost));
-        RETURN_IF_HIP_ERROR(hipMemcpy(&beta_h, beta, sizeof(Tc), hipMemcpyDeviceToHost));
-        alpha = &alpha_h;
-        beta  = &beta_h;
-    }
+    RETURN_IF_ROCBLAS_ERROR(
+        copy_alpha_beta_to_host_if_on_device(handle, alpha, beta, alpha_h, beta_h, k));
 
     // check alignment of pointers before casting
     if(BATCHED)
@@ -807,9 +798,7 @@ rocblas_status gemm_ex_typecasting(rocblas_handle    handle,
                                         offsetDin,
                                         ldd,
                                         stride_d,
-                                        batch_count,
-                                        (hipEvent_t*)startEvent,
-                                        (hipEvent_t*)stopEvent);
+                                        batch_count);
     }
     else
     {
@@ -841,10 +830,60 @@ rocblas_status gemm_ex_typecasting(rocblas_handle    handle,
                                         offsetDin,
                                         ldd,
                                         stride_d,
-                                        batch_count,
-                                        (hipEvent_t*)startEvent,
-                                        (hipEvent_t*)stopEvent);
+                                        batch_count);
     }
+}
+
+template <typename T>
+inline rocblas_status validateArgs(rocblas_handle    handle,
+                                   rocblas_operation trans_a,
+                                   rocblas_operation trans_b,
+                                   rocblas_int       m,
+                                   rocblas_int       n,
+                                   rocblas_int       k,
+                                   const T*          alpha,
+                                   const void*       a,
+                                   rocblas_int       ld_a,
+                                   const void*       b,
+                                   rocblas_int       ld_b,
+                                   const T*          beta,
+                                   const void*       c,
+                                   rocblas_int       ld_c,
+                                   const void*       d,
+                                   rocblas_int       ld_d,
+                                   rocblas_datatype  compute_type,
+                                   rocblas_int       batch_count = 1)
+{
+    // handle must be valid
+    if(!handle)
+        return rocblas_status_invalid_handle;
+
+    // sizes must not be negative
+    if(m < 0 || n < 0 || k < 0 || batch_count < 0)
+        return rocblas_status_invalid_size;
+
+    // leading dimensions must be valid
+    if(ld_c < m || ld_d < m || ld_a < (trans_a == rocblas_operation_none ? m : k)
+       || ld_b < (trans_b == rocblas_operation_none ? k : n))
+        return rocblas_status_invalid_size;
+
+    // quick return
+    // Note: k==0 is not a quick return, because C must still be multiplied by beta
+    if(!m || !n || !batch_count)
+        return rocblas_status_success;
+
+    if(!alpha || !beta)
+        return rocblas_status_invalid_pointer;
+
+    // If (alpha == 0 || k == 0) && beta == 1 we could just copy
+    // C into D. Right now this should be handled as a "scale"
+    // operation later, which should be ok.
+
+    // pointers must be valid
+    if(((!a || !b) && k != 0) || !c || !d)
+        return rocblas_status_invalid_pointer;
+
+    return rocblas_status_continue;
 }
 
 template <bool BATCHED>
@@ -877,13 +916,14 @@ rocblas_status rocblas_gemm_ex_template(rocblas_handle    handle,
                                         rocblas_int       ldd,
                                         rocblas_stride    stride_d,
                                         rocblas_int       batch_count,
-                                        rocblas_datatype  compute_type,
-                                        void*             startEvent = nullptr,
-                                        void*             stopEvent  = nullptr)
+                                        rocblas_datatype  compute_type)
 {
     // Note: k==0 is not an early exit, since C still needs to be multiplied by beta
     if(!m || !n || !batch_count)
         return rocblas_status_success;
+
+    // Temporarily change the thread's default device ID to the handle's device ID
+    auto saved_device_id = handle->push_device_id();
 
     if(BATCHED)
     {
@@ -895,10 +935,9 @@ rocblas_status rocblas_gemm_ex_template(rocblas_handle    handle,
 
     rocblas_status rb_status = rocblas_status_not_implemented;
 
-#define EX_TYPECASTING_PARM                                                                    \
-    handle, trans_a, trans_b, m, n, k, alpha, a, offsetAin, lda, stride_a, b, offsetBin, ldb,  \
-        stride_b, beta, c, offsetCin, ldc, stride_c, d, offsetDin, ldd, stride_d, batch_count, \
-        startEvent, stopEvent
+#define EX_TYPECASTING_PARM                                                                   \
+    handle, trans_a, trans_b, m, n, k, alpha, a, offsetAin, lda, stride_a, b, offsetBin, ldb, \
+        stride_b, beta, c, offsetCin, ldc, stride_c, d, offsetDin, ldd, stride_d, batch_count
 
     if(a_type == rocblas_datatype_f64_r && b_type == rocblas_datatype_f64_r
        && c_type == rocblas_datatype_f64_r && d_type == rocblas_datatype_f64_r
@@ -943,8 +982,8 @@ rocblas_status rocblas_gemm_ex_template(rocblas_handle    handle,
     {
         // For now, K must be a multiple of 4
         if(k % 4 != 0 || ((trans_a == rocblas_operation_transpose) && (lda % 4 != 0))
-           || ((trans_b == rocblas_operation_none) && (ldb % 4 != 0)) || stride_a % 4 != 0
-           || stride_b % 4 != 0)
+           || ((trans_b == rocblas_operation_none) && (ldb % 4 != 0))
+           || (batch_count > 1 && (stride_a % 4 != 0 || stride_b % 4 != 0)))
         {
             rb_status = rocblas_status_invalid_size;
         }
@@ -995,5 +1034,45 @@ rocblas_status rocblas_gemm_ex_template(rocblas_handle    handle,
 }
 
 #undef EX_TYPECASTING_PARM
+
+// Union for representing scalar values
+typedef union rocblas_union_u
+{
+    rocblas_half           h;
+    float                  s;
+    double                 d;
+    int32_t                i;
+    rocblas_float_complex  c;
+    rocblas_double_complex z;
+} rocblas_union_t;
+
+// Copy alpha and beta to host if on device
+template <typename T>
+rocblas_status copy_alpha_beta_to_host_if_on_device(rocblas_handle   handle,
+                                                    const T*&        alpha,
+                                                    const T*&        beta,
+                                                    rocblas_union_t& alpha_h,
+                                                    rocblas_union_t& beta_h,
+                                                    rocblas_int      k,
+                                                    rocblas_datatype compute_type)
+{
+    switch(compute_type)
+    {
+    case rocblas_datatype_f16_r:
+        return copy_alpha_beta_to_host_if_on_device(handle, alpha, beta, alpha_h.h, beta_h.h, k);
+    case rocblas_datatype_f32_r:
+        return copy_alpha_beta_to_host_if_on_device(handle, alpha, beta, alpha_h.s, beta_h.s, k);
+    case rocblas_datatype_f64_r:
+        return copy_alpha_beta_to_host_if_on_device(handle, alpha, beta, alpha_h.d, beta_h.d, k);
+    case rocblas_datatype_i32_r:
+        return copy_alpha_beta_to_host_if_on_device(handle, alpha, beta, alpha_h.i, beta_h.i, k);
+    case rocblas_datatype_f32_c:
+        return copy_alpha_beta_to_host_if_on_device(handle, alpha, beta, alpha_h.c, beta_h.c, k);
+    case rocblas_datatype_f64_c:
+        return copy_alpha_beta_to_host_if_on_device(handle, alpha, beta, alpha_h.z, beta_h.z, k);
+    default:
+        return rocblas_status_not_implemented;
+    }
+}
 
 #endif

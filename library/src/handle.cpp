@@ -1,72 +1,57 @@
 /* ************************************************************************
  * Copyright 2016-2020 Advanced Micro Devices, Inc.
  * ************************************************************************ */
-#include "handle.h"
-#include <cstdio>
-#include <cstdlib>
+#include "handle.hpp"
+#include <cstdarg>
 
 #if BUILD_WITH_TENSILE
-#ifdef USE_TENSILE_HOST
-#include "tensile_host.hpp"
-#else
+#ifndef USE_TENSILE_HOST
 #include "Tensile.h"
 #endif
+#else
+// see TensileHost.cpp for normal rocblas_initialize definition
+// it isn't compiled if not BUILD_WITH_TENSILE so defining here
+extern "C" void rocblas_initialize() {}
 #endif
 
 /*******************************************************************************
  * constructor
  ******************************************************************************/
+static inline int getDevice()
+{
+    int device;
+    THROW_IF_HIP_ERROR(hipGetDevice(&device));
+    return device;
+}
+
 _rocblas_handle::_rocblas_handle()
+    : device(getDevice()) // active device is handle device
 {
 #if BUILD_WITH_TENSILE
-#ifdef USE_TENSILE_HOST
-    // Cache the Tensile host on the first handle, since it takes
-    // up to 10 seconds to load; later handles reuse the same host
-    static TensileHost* hostImpl = createTensileHost();
-    host                         = hostImpl;
-#else
-    static int dummy = (tensileInitialize(), 0);
+#ifndef USE_TENSILE_HOST
+    static int once = (tensileInitialize(), 0);
 #endif
 #endif
-
-    // default device is active device
-    THROW_IF_HIP_ERROR(hipGetDevice(&device));
-    THROW_IF_HIP_ERROR(hipGetDeviceProperties(&device_properties, device));
-
-    // rocblas by default take the system default stream 0 users cannot create
 
     // Device memory size
-    //
-    // If ROCBLAS_DEVICE_MEMORY_SIZE is set to > 0, then rocBLAS will allocate
-    // the size specified, and will not manage device memory itself.
-    //
-    // If ROCBLAS_DEVICE_MEMORY_SIZE is unset, invalid or 0, then rocBLAS will
-    // allocate a default initial size and manage device memory itself,
-    // growing it as necessary.
     const char* env = getenv("ROCBLAS_DEVICE_MEMORY_SIZE");
     if(env)
         device_memory_size = strtoul(env, nullptr, 0);
-    else
+    else if(getenv("WORKBUF_TRSM_B_CHNK"))
     {
-        env = getenv("WORKBUF_TRSM_B_CHNK");
-        if(env)
-        {
-            static int once
-                = fputs("Warning: Environment variable WORKBUF_TRSM_B_CHNK is obsolete.\n"
-                        "Use ROCBLAS_DEVICE_MEMORY_SIZE instead.\n",
-                        stderr);
-            device_memory_size = strtoul(env, nullptr, 0);
-            if(device_memory_size)
-                device_memory_size = device_memory_size * 1024 + 1024 * 1024 * 2;
-        }
+        static auto& once = rocblas_cerr << "Warning: Environment variable WORKBUF_TRSM_B_CHNK is "
+                                            "obsolete.\nUse ROCBLAS_DEVICE_MEMORY_SIZE instead."
+                                         << std::endl;
     }
 
-    device_memory_is_rocblas_managed = !env || !device_memory_size;
-    if(device_memory_is_rocblas_managed)
+    if(!env || !device_memory_size)
         device_memory_size = DEFAULT_DEVICE_MEMORY_SIZE;
 
     // Allocate device memory
     THROW_IF_HIP_ERROR((hipMalloc)(&device_memory, device_memory_size));
+
+    // Initialize logging
+    init_logging();
 }
 
 /*******************************************************************************
@@ -76,43 +61,19 @@ _rocblas_handle::~_rocblas_handle()
 {
     if(device_memory_in_use)
     {
-        fputs("rocBLAS internal error: Handle object destroyed while device memory still in use.\n",
-              stderr);
-        abort();
+        rocblas_cerr
+            << "rocBLAS internal error: Handle object destroyed while device memory still in use."
+            << std::endl;
+        rocblas_abort();
     }
-    if(device_memory)
-        (hipFree)(device_memory);
-}
-
-/*******************************************************************************
- * helper for allocating device memory
- ******************************************************************************/
-void* _rocblas_handle::device_allocator(size_t size)
-{
-    if(device_memory_in_use)
+    auto hipStatus = (hipFree)(device_memory);
+    if(hipStatus != hipSuccess)
     {
-        fputs("rocBLAS internal error: Cannot allocate device memory while it is already "
-              "allocated.\n",
-              stderr);
-        abort();
-    }
-    if(size > device_memory_size)
-    {
-        if(!device_memory_is_rocblas_managed)
-            return nullptr;
-        if(device_memory)
-        {
-            (hipFree)(device_memory);
-            device_memory = nullptr;
-        }
-        device_memory_size = 0;
-        if((hipMalloc)(&device_memory, size) == hipSuccess)
-            device_memory_size = size;
-        else
-            return nullptr;
-    }
-    device_memory_in_use = true;
-    return device_memory;
+        rocblas_cerr << "rocBLAS error during hipFree in handle destructor: "
+                     << rocblas_status_to_string(get_rocblas_status_for_hip_status(hipStatus))
+                     << std::endl;
+        rocblas_abort();
+    };
 }
 
 /*******************************************************************************
@@ -156,7 +117,7 @@ catch(...)
 }
 
 /*******************************************************************************
- * get the device memory size
+ * Get the device memory size
  ******************************************************************************/
 extern "C" rocblas_status rocblas_get_device_memory_size(rocblas_handle handle, size_t* size)
 try
@@ -174,7 +135,7 @@ catch(...)
 }
 
 /*******************************************************************************
- * set the device memory size
+ * Set the device memory size
  ******************************************************************************/
 extern "C" rocblas_status rocblas_set_device_memory_size(rocblas_handle handle, size_t size)
 try
@@ -188,25 +149,23 @@ try
         return rocblas_status_internal_error;
 
     // Free existing device memory, if any
-    if(handle->device_memory)
-    {
-        (hipFree)(handle->device_memory);
-        handle->device_memory = nullptr;
-    }
+    RETURN_IF_HIP_ERROR((hipFree)(handle->device_memory));
+    handle->device_memory      = nullptr;
     handle->device_memory_size = 0;
 
-    // A zero size requests rocBLAS to take over management of device memory.
-    // A nonzero size forces rocBLAS to use that as a fixed size, and not change it.
-    handle->device_memory_is_rocblas_managed = !size;
-    if(size)
+    // Allocate size rounded up to MIN_CHUNK_SIZE
+    size           = roundup_device_memory_size(size);
+    auto hipStatus = (hipMalloc)(&handle->device_memory, size);
+    if(hipStatus != hipSuccess)
     {
-        size           = handle->roundup_device_memory_size(size);
-        auto hipStatus = (hipMalloc)(&handle->device_memory, size);
-        if(hipStatus != hipSuccess)
-            return get_rocblas_status_for_hip_status(hipStatus);
-        handle->device_memory_size = size;
+        handle->device_memory = nullptr;
+        return get_rocblas_status_for_hip_status(hipStatus);
     }
-    return rocblas_status_success;
+    else
+    {
+        handle->device_memory_size = size;
+        return rocblas_status_success;
+    }
 }
 catch(...)
 {
@@ -215,109 +174,239 @@ catch(...)
 
 /*******************************************************************************
  * Returns whether device memory is rocblas-managed
+ * (Returns always false now, since it is impractical to manage in rocBLAS.)
  ******************************************************************************/
-extern "C" bool rocblas_is_managing_device_memory(rocblas_handle handle)
+extern "C" bool rocblas_is_managing_device_memory(rocblas_handle)
 {
-    return handle && handle->device_memory_is_rocblas_managed;
+    return false;
 }
 
-/*******************************************************************************
- * Static handle data
+/* \brief
+   \details
+   Returns true if the handle is in device memory size query mode.
+   @param[in]
+   handle           rocblas handle
  ******************************************************************************/
-rocblas_layer_mode    _rocblas_handle::layer_mode = rocblas_layer_mode_none;
-std::ofstream         _rocblas_handle::log_trace_ofs;
-std::ostream*         _rocblas_handle::log_trace_os;
-std::ofstream         _rocblas_handle::log_bench_ofs;
-std::ostream*         _rocblas_handle::log_bench_os;
-std::ofstream         _rocblas_handle::log_profile_ofs;
-std::ostream*         _rocblas_handle::log_profile_os;
-_rocblas_handle::init _rocblas_handle::handle_init;
-constexpr size_t      _rocblas_handle::DEFAULT_DEVICE_MEMORY_SIZE; // Not needed in C++17
-constexpr size_t      _rocblas_handle::MIN_CHUNK_SIZE; // Not needed in C++17
+extern "C" bool rocblas_is_device_memory_size_query(rocblas_handle handle)
+{
+    return handle && handle->is_device_memory_size_query();
+}
+
+// Helper function to round up sizes and compute total size
+static inline size_t va_total_device_memory_size(size_t count, va_list ap)
+{
+    size_t total = 0;
+    while(count--)
+        total += roundup_device_memory_size(va_arg(ap, size_t));
+    return total;
+}
+
+/* \brief
+   \details
+   Sets the optimal device memory size during a query
+   Returns rocblas_status_size_increased if the maximum size was increased,
+   rocblas_status_size_unchanged if the maximum size was unchanged, or
+   rocblas_status_size_query_mismatch if the handle is not in query mode.
+   @param[in]
+   handle           rocblas handle
+   count            number of sizes
+   ...              sizes needed for optimal execution of the current kernel
+ ******************************************************************************/
+extern "C" rocblas_status
+    rocblas_set_optimal_device_memory_size_impl(rocblas_handle handle, size_t count, ...)
+{
+    if(!handle)
+        return rocblas_status_invalid_handle;
+    va_list ap;
+    va_start(ap, count);
+    size_t total = va_total_device_memory_size(count, ap);
+    va_end(ap);
+    return handle->set_optimal_device_memory_size(total);
+}
+
+/*! \brief
+    \details
+    Borrows size bytes from the device memory allocated in handle.
+    Returns rocblas_status_invalid_handle if handle is nullptr; rocblas_status_invalid_pointer if res is nullptr; otherwise rocblas_status_success
+    @param[in]
+    handle          rocblas handle
+    count           number of sizes
+    ...             sizes to allocate
+    @param[out]
+    res             pointer to pointer to struct rocblas_device_malloc_base
+ ******************************************************************************/
+extern "C" rocblas_status rocblas_device_malloc_alloc(rocblas_handle               handle,
+                                                      rocblas_device_malloc_base** res,
+                                                      size_t                       count,
+                                                      ...)
+try
+{
+    if(!handle)
+        return rocblas_status_invalid_handle;
+    if(!res)
+        return rocblas_status_invalid_pointer;
+    if(!count)
+        return rocblas_status_invalid_size;
+
+    *res = nullptr; // in case of exception
+
+    // Compute the total of the rounded up sizes
+    va_list ap;
+    va_start(ap, count);
+    size_t total = va_total_device_memory_size(count, ap);
+    va_end(ap);
+
+    // Borrow allocated memory from the handle
+    auto mem = handle->device_malloc_count(count, total);
+
+    // If unsuccessful
+    if(!mem)
+        return rocblas_status_memory_error;
+
+    // Get the base of the allocated pointers
+    char* addr = static_cast<char*>(mem[0]);
+
+    // Compute each pointer based on offsets
+    va_start(ap, count);
+    for(size_t i = 0; i < count; ++i)
+    {
+        size_t size = roundup_device_memory_size(va_arg(ap, size_t));
+        mem[i]      = size ? addr : nullptr;
+        addr += size;
+    }
+    va_end(ap);
+
+    // Move it to the heap
+    *res = new auto(std::move(mem));
+
+    return rocblas_status_success;
+}
+catch(...)
+{
+    return exception_to_rocblas_status();
+}
+
+/*! \brief
+    \details
+    Tells whether an allocation succeeded
+    @param[in]
+    ptr             pointer to struct rocblas_device_malloc_base
+ ******************************************************************************/
+extern "C" bool rocblas_device_malloc_success(rocblas_device_malloc_base* ptr)
+{
+    using _device_malloc = decltype(rocblas_handle {}->device_malloc(0));
+    return ptr && *static_cast<_device_malloc*>(ptr);
+}
+
+/*! \brief
+    \details
+    Converts rocblas_device_malloc() to a pointer if it only has one pointer.
+    Retuns rocblas_status_invalid_pointer if ptr or res is nullptr, there is more than one pointer, or the underyling object is not from rocblas_device_malloc(); rocblas_status_success otherwise
+    @param[in]
+    ptr             pointer to struct rocblas_device_malloc_base
+    @param[out]
+    res             pointer to pointer to void
+*/
+extern "C" rocblas_status rocblas_device_malloc_ptr(rocblas_device_malloc_base* ptr, void** res)
+try
+{
+    using _device_malloc = decltype(rocblas_handle {}->device_malloc(0));
+    if(!ptr || !res)
+        return rocblas_status_invalid_pointer;
+    *res = static_cast<void*>(*static_cast<_device_malloc*>(ptr));
+    return rocblas_status_success;
+}
+catch(...)
+{
+    return rocblas_status_invalid_pointer;
+}
+
+/*! \brief
+    \details
+    Gets a pointer to device memory allocated by rocblas_device_malloc().
+    Returns rocblas_status_invalid_pointer if ptr or res is nullptr or the underyling object is not from rocblas_device_malloc(); rocblas_status_success otherwise
+    @param[in]
+    ptr             pointer to struct rocblas_device_malloc_base
+    index           index of the pointer to get
+    @param[out]
+    res             pointer to pointer to void
+*/
+extern "C" rocblas_status
+    rocblas_device_malloc_get(rocblas_device_malloc_base* ptr, size_t index, void** res)
+try
+{
+    using _device_malloc = decltype(rocblas_handle {}->device_malloc(0));
+    if(!ptr || !res)
+        return rocblas_status_invalid_pointer;
+    *res = (*static_cast<_device_malloc*>(ptr))[index];
+    return rocblas_status_success;
+}
+catch(...)
+{
+    return rocblas_status_invalid_pointer;
+}
+
+/*! \brief
+    \details
+    Frees memory borrowed from the device memory allocated in handle.
+    @param[in]
+    ptr             pointer to struct rocblas_device_malloc_base
+*/
+extern "C" rocblas_status rocblas_device_malloc_free(rocblas_device_malloc_base* ptr)
+{
+    using _device_malloc = decltype(rocblas_handle {}->device_malloc(0));
+    delete static_cast<_device_malloc*>(ptr);
+    return rocblas_status_success;
+}
 
 /**
  *  @brief Logging function
  *
  *  @details
- *  open_log_stream Open stream log_os for logging.
+ *  open_log_stream Return a stream opened for logging.
  *                  If the environment variable with name environment_variable_name
- *                  is not set, then stream log_os to std::cerr.
- *                  Else open a file at the full logfile path contained in
- *                  the environment variable.
- *                  If opening the file suceeds, stream to the file
- *                  else stream to std::cerr.
+ *                  is set, then it indicates the name of the file to be opened.
+ *                  If the environment variable with name environment_variable_name
+ *                  is not set, and the environment variable ROCBLAS_LOG_PATH is set,
+ *                  then ROCBLAS_LOG_PATH indicates the name of the file to open.
+ *                  Otherwise open the stream to stderr.
  *
  *  @param[in]
  *  environment_variable_name   const char*
  *                              Name of environment variable that contains
  *                              the full logfile path.
- *
- *  @parm[out]
- *  log_os      std::ostream*&
- *              Output stream. Stream to std:cerr if environment_variable_name
- *              is not set, else set to stream to log_ofs
- *
- *  @parm[out]
- *  log_ofs     std::ofstream&
- *              Output file stream. If log_ofs->is_open()==true, then log_os
- *              will stream to log_ofs. Else it will stream to std::cerr.
  */
 
-static void open_log_stream(const char*    environment_variable_name,
-                            std::ostream*& log_os,
-                            std::ofstream& log_ofs)
+static auto open_log_stream(const char* environment_variable_name)
 {
-    // By default, output to cerr
-    log_os = &std::cerr;
-
-    // if environment variable is set, open file at logfile_pathname contained in the
-    // environment variable
-    auto logfile_pathname = getenv(environment_variable_name);
-    if(logfile_pathname)
-    {
-        log_ofs.open(logfile_pathname, std::ios_base::trunc);
-
-        // if log_ofs is open, then stream to log_ofs, else log_os is already set to std::cerr
-        if(log_ofs.is_open())
-            log_os = &log_ofs;
-    }
+    const char* logfile;
+    return (logfile = getenv(environment_variable_name)) != nullptr
+                   || (logfile = getenv("ROCBLAS_LOG_PATH")) != nullptr
+               ? std::make_unique<rocblas_ostream>(logfile)
+               : std::make_unique<rocblas_ostream>(STDERR_FILENO);
 }
 
 /*******************************************************************************
- * Static runtime initialization
+ * Logging initialization
  ******************************************************************************/
-_rocblas_handle::init::init()
+void _rocblas_handle::init_logging()
 {
     // set layer_mode from value of environment variable ROCBLAS_LAYER
-    auto str_layer_mode = getenv("ROCBLAS_LAYER");
+    const char* str_layer_mode = getenv("ROCBLAS_LAYER");
     if(str_layer_mode)
     {
         layer_mode = static_cast<rocblas_layer_mode>(strtol(str_layer_mode, 0, 0));
 
         // open log_trace file
         if(layer_mode & rocblas_layer_mode_log_trace)
-            open_log_stream("ROCBLAS_LOG_TRACE_PATH", log_trace_os, log_trace_ofs);
+            log_trace_os = open_log_stream("ROCBLAS_LOG_TRACE_PATH");
 
         // open log_bench file
         if(layer_mode & rocblas_layer_mode_log_bench)
-            open_log_stream("ROCBLAS_LOG_BENCH_PATH", log_bench_os, log_bench_ofs);
+            log_bench_os = open_log_stream("ROCBLAS_LOG_BENCH_PATH");
 
         // open log_profile file
         if(layer_mode & rocblas_layer_mode_log_profile)
-            open_log_stream("ROCBLAS_LOG_PROFILE_PATH", log_profile_os, log_profile_ofs);
+            log_profile_os = open_log_stream("ROCBLAS_LOG_PROFILE_PATH");
     }
 }
-
-/*******************************************************************************
- * Static reinitialization (for testing only)
- ******************************************************************************/
-namespace rocblas
-{
-    void reinit_logs()
-    {
-        _rocblas_handle::log_trace_ofs.close();
-        _rocblas_handle::log_bench_ofs.close();
-        _rocblas_handle::log_profile_ofs.close();
-        new(&_rocblas_handle::handle_init) _rocblas_handle::init;
-    }
-} // namespace rocblas

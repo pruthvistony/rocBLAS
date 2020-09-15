@@ -1,10 +1,10 @@
 /* ************************************************************************
  * Copyright 2018-2020 Advanced Micro Devices, Inc.
  * ************************************************************************/
-
 #include "cblas_interface.hpp"
 #include "rocblas_vector.hpp"
 #include "utility.hpp"
+#include <omp.h>
 
 /*
  * ===========================================================================
@@ -20,9 +20,15 @@ void cblas_axpy<rocblas_half>(rocblas_int   n,
                               rocblas_half* y,
                               rocblas_int   incy)
 {
-    size_t             abs_incx = incx >= 0 ? incx : -incx;
-    size_t             abs_incy = incy >= 0 ? incy : -incy;
-    host_vector<float> x_float(n * abs_incx), y_float(n * abs_incy);
+    size_t abs_incx = incx >= 0 ? incx : -incx;
+    size_t abs_incy = incy >= 0 ? incy : -incy;
+    size_t size_x   = n * abs_incx;
+    size_t size_y   = n * abs_incy;
+    if(!size_x)
+        size_x = 1;
+    if(!size_y)
+        size_y = 1;
+    host_vector<float> x_float(size_x), y_float(size_y);
 
     for(size_t i = 0; i < n; i++)
     {
@@ -47,10 +53,16 @@ void cblas_dot<rocblas_half>(rocblas_int         n,
                              rocblas_int         incy,
                              rocblas_half*       result)
 {
-    size_t             abs_incx = incx >= 0 ? incx : -incx;
-    size_t             abs_incy = incy >= 0 ? incy : -incy;
-    host_vector<float> x_float(n * abs_incx);
-    host_vector<float> y_float(n * abs_incy);
+    size_t abs_incx = incx >= 0 ? incx : -incx;
+    size_t abs_incy = incy >= 0 ? incy : -incy;
+    size_t size_x   = n * abs_incx;
+    size_t size_y   = n * abs_incy;
+    if(!size_x)
+        size_x = 1;
+    if(!size_y)
+        size_y = 1;
+    host_vector<float> x_float(size_x);
+    host_vector<float> y_float(size_y);
 
     for(size_t i = 0; i < n; i++)
     {
@@ -69,10 +81,16 @@ void cblas_dot<rocblas_bfloat16>(rocblas_int             n,
                                  rocblas_int             incy,
                                  rocblas_bfloat16*       result)
 {
-    size_t             abs_incx = incx >= 0 ? incx : -incx;
-    size_t             abs_incy = incy >= 0 ? incy : -incy;
-    host_vector<float> x_float(n * abs_incx);
-    host_vector<float> y_float(n * abs_incy);
+    size_t abs_incx = incx >= 0 ? incx : -incx;
+    size_t abs_incy = incy >= 0 ? incy : -incy;
+    size_t size_x   = n * abs_incx;
+    size_t size_y   = n * abs_incy;
+    if(!size_x)
+        size_x = 1;
+    if(!size_y)
+        size_y = 1;
+    host_vector<float> x_float(size_x);
+    host_vector<float> y_float(size_y);
 
     for(size_t i = 0; i < n; i++)
     {
@@ -95,6 +113,129 @@ void cblas_dot<rocblas_bfloat16>(rocblas_int             n,
  * ===========================================================================
  */
 
+// geam
+template <typename T>
+inline T geam_conj_helper(const T& x)
+{
+    return x;
+}
+
+template <>
+inline rocblas_float_complex geam_conj_helper(const rocblas_float_complex& x)
+{
+    return std::conj(x);
+}
+
+template <>
+inline rocblas_double_complex geam_conj_helper(const rocblas_double_complex& x)
+{
+    return std::conj(x);
+}
+
+template <typename T>
+void cblas_geam_helper(rocblas_operation transA,
+                       rocblas_operation transB,
+                       rocblas_int       M,
+                       rocblas_int       N,
+                       T                 alpha,
+                       T*                A,
+                       rocblas_int       lda,
+                       T                 beta,
+                       T*                B,
+                       rocblas_int       ldb,
+                       T*                C,
+                       rocblas_int       ldc)
+{
+    rocblas_int inc1_A = transA == rocblas_operation_none ? 1 : lda;
+    rocblas_int inc2_A = transA == rocblas_operation_none ? lda : 1;
+    rocblas_int inc1_B = transB == rocblas_operation_none ? 1 : ldb;
+    rocblas_int inc2_B = transB == rocblas_operation_none ? ldb : 1;
+
+#pragma omp parallel for
+    for(rocblas_int i = 0; i < M; i++)
+    {
+        for(rocblas_int j = 0; j < N; j++)
+        {
+            T a_val = A[i * inc1_A + j * inc2_A];
+            T b_val = B[i * inc1_B + j * inc2_B];
+            if(transA == rocblas_operation_conjugate_transpose)
+                a_val = geam_conj_helper(a_val);
+            if(transB == rocblas_operation_conjugate_transpose)
+                b_val = geam_conj_helper(b_val);
+            C[i + j * ldc] = alpha * a_val + beta * b_val;
+        }
+    }
+}
+
+template <>
+void cblas_geam(rocblas_operation transa,
+                rocblas_operation transb,
+                rocblas_int       m,
+                rocblas_int       n,
+                float*            alpha,
+                float*            A,
+                rocblas_int       lda,
+                float*            beta,
+                float*            B,
+                rocblas_int       ldb,
+                float*            C,
+                rocblas_int       ldc)
+{
+    return cblas_geam_helper(transa, transb, m, n, *alpha, A, lda, *beta, B, ldb, C, ldc);
+}
+
+template <>
+void cblas_geam(rocblas_operation transa,
+                rocblas_operation transb,
+                rocblas_int       m,
+                rocblas_int       n,
+                double*           alpha,
+                double*           A,
+                rocblas_int       lda,
+                double*           beta,
+                double*           B,
+                rocblas_int       ldb,
+                double*           C,
+                rocblas_int       ldc)
+{
+    return cblas_geam_helper(transa, transb, m, n, *alpha, A, lda, *beta, B, ldb, C, ldc);
+}
+
+template <>
+void cblas_geam(rocblas_operation      transa,
+                rocblas_operation      transb,
+                rocblas_int            m,
+                rocblas_int            n,
+                rocblas_float_complex* alpha,
+                rocblas_float_complex* A,
+                rocblas_int            lda,
+                rocblas_float_complex* beta,
+                rocblas_float_complex* B,
+                rocblas_int            ldb,
+                rocblas_float_complex* C,
+                rocblas_int            ldc)
+{
+    return cblas_geam_helper(transa, transb, m, n, *alpha, A, lda, *beta, B, ldb, C, ldc);
+}
+
+template <>
+void cblas_geam(rocblas_operation       transa,
+                rocblas_operation       transb,
+                rocblas_int             m,
+                rocblas_int             n,
+                rocblas_double_complex* alpha,
+                rocblas_double_complex* A,
+                rocblas_int             lda,
+                rocblas_double_complex* beta,
+                rocblas_double_complex* B,
+                rocblas_int             ldb,
+                rocblas_double_complex* C,
+                rocblas_int             ldc)
+{
+    return cblas_geam_helper(transa, transb, m, n, *alpha, A, lda, *beta, B, ldb, C, ldc);
+}
+
+// gemm
 template <>
 void cblas_gemm<rocblas_bfloat16, float, float>(rocblas_operation transA,
                                                 rocblas_operation transB,
@@ -354,3 +495,139 @@ void cblas_gemm<int8_t, int32_t, int32_t>(rocblas_operation transA,
     for(size_t i = 0; i < sizeC; i++)
         C[i] = static_cast<int32_t>(C_double[i]);
 }
+
+template <typename T, typename U>
+void cblas_herkx(rocblas_fill      uplo,
+                 rocblas_operation transA,
+                 rocblas_int       n,
+                 rocblas_int       k,
+                 const T*          alpha,
+                 const T*          A,
+                 rocblas_int       lda,
+                 const T*          B,
+                 rocblas_int       ldb,
+                 const U*          beta,
+                 T*                C,
+                 rocblas_int       ldc)
+{
+    if(n <= 0 || (*beta == 1 && (k == 0 || *alpha == 0)))
+        return;
+
+    if(transA == rocblas_operation_none)
+    {
+        if(uplo == rocblas_fill_upper)
+        {
+#pragma omp parallel for
+            for(int j = 0; j < n; ++j)
+            {
+                for(int i = 0; i <= j; i++)
+                {
+                    C[i + j * ldc] *= *beta;
+                }
+
+                for(int l = 0; l < k; l++)
+                {
+                    T temp = *alpha * std::conj(B[j + l * ldb]);
+                    for(int i = 0; i <= j; ++i)
+                    {
+                        C[i + j * ldc] += temp * A[i + l * lda];
+                    }
+                }
+                C[j + j * ldc].imag(0);
+            }
+        }
+        else // lower
+        {
+#pragma omp parallel for
+            for(int j = 0; j < n; ++j)
+            {
+                for(int i = j; i < n; i++)
+                {
+                    C[i + j * ldc] *= *beta;
+                }
+
+                for(int l = 0; l < k; l++)
+                {
+                    T temp = *alpha * std::conj(B[j + l * ldb]);
+                    for(int i = j; i < n; ++i)
+                    {
+                        C[i + j * ldc] += temp * A[i + l * lda];
+                    }
+                }
+                C[j + j * ldc].imag(0);
+            }
+        }
+    }
+    else // conjugate transpose
+    {
+        if(uplo == rocblas_fill_upper)
+        {
+#pragma omp parallel for
+            for(int j = 0; j < n; ++j)
+            {
+                for(int i = 0; i <= j; i++)
+                {
+                    C[i + j * ldc] *= *beta;
+
+                    T temp(0);
+                    for(int l = 0; l < k; l++)
+                    {
+                        temp += std::conj(A[l + i * lda]) * B[l + j * ldb];
+                    }
+                    C[i + j * ldc] += *alpha * temp;
+
+                    if(i == j)
+                        C[j + j * ldc].imag(0);
+                }
+            }
+        }
+        else // lower
+        {
+#pragma omp parallel for
+            for(int j = 0; j < n; ++j)
+            {
+                for(int i = j; i < n; i++)
+                {
+                    C[i + j * ldc] *= *beta;
+
+                    T temp(0);
+                    for(int l = 0; l < k; l++)
+                    {
+                        temp += std::conj(A[l + i * lda]) * B[l + j * ldb];
+                    }
+                    C[i + j * ldc] += *alpha * temp;
+
+                    if(i == j)
+                        C[j + j * ldc].imag(0);
+                }
+            }
+        }
+    }
+}
+
+// instantiations
+template void cblas_herkx<rocblas_float_complex, float>(rocblas_fill                 uplo,
+                                                        rocblas_operation            transA,
+                                                        rocblas_int                  n,
+                                                        rocblas_int                  k,
+                                                        const rocblas_float_complex* alpha,
+                                                        const rocblas_float_complex* A,
+                                                        rocblas_int                  lda,
+                                                        const rocblas_float_complex* B,
+                                                        rocblas_int                  ldb,
+                                                        const float*                 beta,
+                                                        rocblas_float_complex*       C,
+                                                        rocblas_int                  ldc);
+
+template void cblas_herkx<rocblas_double_complex, double>(rocblas_fill                  uplo,
+                                                          rocblas_operation             transA,
+                                                          rocblas_int                   n,
+                                                          rocblas_int                   k,
+                                                          const rocblas_double_complex* alpha,
+                                                          const rocblas_double_complex* A,
+                                                          rocblas_int                   lda,
+                                                          const rocblas_double_complex* B,
+                                                          rocblas_int                   ldb,
+                                                          const double*                 beta,
+                                                          rocblas_double_complex*       C,
+                                                          rocblas_int                   ldc);

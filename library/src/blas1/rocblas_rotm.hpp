@@ -1,10 +1,9 @@
 /* ************************************************************************
  * Copyright 2016-2020 Advanced Micro Devices, Inc.
  * ************************************************************************ */
-#include "handle.h"
-#include "logging.h"
-#include "rocblas.h"
-#include "utility.h"
+#pragma once
+#include "handle.hpp"
+#include "logging.hpp"
 
 template <typename T, typename U>
 __device__ void rotm_kernel_calc(rocblas_int    n,
@@ -151,15 +150,21 @@ rocblas_status rocblas_rotm_template(rocblas_handle handle,
                                      rocblas_int    batch_count)
 {
     // Quick return if possible
-    if(n <= 0 || incx <= 0 || incy <= 0 || batch_count <= 0)
+    if(n <= 0 || batch_count <= 0)
         return rocblas_status_success;
 
     if(quick_return_param(handle, param, stride_param))
         return rocblas_status_success;
 
+    auto shiftx = incx < 0 ? offset_x - ptrdiff_t(incx) * (n - 1) : offset_x;
+    auto shifty = incy < 0 ? offset_y - ptrdiff_t(incy) * (n - 1) : offset_y;
+
     dim3        blocks((n - 1) / NB + 1, batch_count);
     dim3        threads(NB);
     hipStream_t rocblas_stream = handle->rocblas_stream;
+
+    // Temporarily change the thread's default device ID to the handle's device ID
+    auto saved_device_id = handle->push_device_id();
 
     if(rocblas_pointer_mode_device == handle->pointer_mode)
         hipLaunchKernelGGL(rotm_kernel_batched,
@@ -169,11 +174,11 @@ rocblas_status rocblas_rotm_template(rocblas_handle handle,
                            rocblas_stream,
                            n,
                            x,
-                           offset_x,
+                           shiftx,
                            incx,
                            stride_x,
                            y,
-                           offset_y,
+                           shifty,
                            incy,
                            stride_y,
                            param,
@@ -187,11 +192,11 @@ rocblas_status rocblas_rotm_template(rocblas_handle handle,
                            rocblas_stream,
                            n,
                            x,
-                           offset_x,
+                           shiftx,
                            incx,
                            stride_x,
                            y,
-                           offset_y,
+                           shifty,
                            incy,
                            stride_y,
                            param[0],

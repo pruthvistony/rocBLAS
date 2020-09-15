@@ -2,10 +2,10 @@
  * Copyright 2016-2020 Advanced Micro Devices, Inc.
  * ************************************************************************ */
 #include "rocblas_scal.hpp"
-#include "handle.h"
-#include "logging.h"
+#include "handle.hpp"
+#include "logging.hpp"
 #include "rocblas.h"
-#include "utility.h"
+#include "utility.hpp"
 
 namespace
 {
@@ -30,8 +30,6 @@ namespace
     {
         if(!handle)
             return rocblas_status_invalid_handle;
-        if(!alpha)
-            return rocblas_status_invalid_pointer;
 
         auto layer_mode = handle->layer_mode;
         if(handle->pointer_mode == rocblas_pointer_mode_host)
@@ -45,7 +43,7 @@ namespace
             // ANSWER: -r is syntatic sugar; the types can be specified separately
             if(layer_mode & rocblas_layer_mode_log_bench)
             {
-                std::stringstream alphass;
+                rocblas_ostream alphass;
                 alphass << "--alpha " << std::real(*alpha)
                         << (std::imag(*alpha) != 0
                                 ? (" --alphai " + std::to_string(std::imag(*alpha)))
@@ -70,7 +68,9 @@ namespace
         if(layer_mode & rocblas_layer_mode_log_profile)
             log_profile(handle, rocblas_scal_name<T, U>, "N", n, "incx", incx);
 
-        if(!x)
+        if(n <= 0 || incx <= 0)
+            return rocblas_status_success;
+        if(!x || !alpha)
             return rocblas_status_invalid_pointer;
 
         RETURN_ZERO_DEVICE_MEMORY_SIZE_IF_QUERIED(handle);

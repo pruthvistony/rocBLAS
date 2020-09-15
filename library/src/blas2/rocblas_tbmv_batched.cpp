@@ -1,12 +1,8 @@
 /* ************************************************************************
  * Copyright 2016-2020 Advanced Micro Devices, Inc.
  * ************************************************************************ */
-#include "handle.h"
-#include "logging.h"
-#include "rocblas.h"
+#include "logging.hpp"
 #include "rocblas_tbmv.hpp"
-#include "utility.h"
-#include <limits>
 
 namespace
 {
@@ -37,74 +33,77 @@ namespace
         if(!handle)
             return rocblas_status_invalid_handle;
 
-        auto layer_mode = handle->layer_mode;
-        if(layer_mode
-           & (rocblas_layer_mode_log_trace | rocblas_layer_mode_log_bench
-              | rocblas_layer_mode_log_profile))
+        if(!handle->is_device_memory_size_query())
         {
-            auto uplo_letter   = rocblas_fill_letter(uplo);
-            auto transA_letter = rocblas_transpose_letter(transA);
-            auto diag_letter   = rocblas_diag_letter(diag);
-
-            if(layer_mode & rocblas_layer_mode_log_trace)
-                log_trace(handle,
-                          rocblas_tbmv_name<T>,
-                          uplo,
-                          transA,
-                          diag,
-                          m,
-                          k,
-                          A,
-                          lda,
-                          x,
-                          incx,
-                          batch_count);
-
-            if(layer_mode & rocblas_layer_mode_log_bench)
+            auto layer_mode = handle->layer_mode;
+            if(layer_mode
+               & (rocblas_layer_mode_log_trace | rocblas_layer_mode_log_bench
+                  | rocblas_layer_mode_log_profile))
             {
-                log_bench(handle,
-                          "./rocblas-bench -f tbmv_batched -r",
-                          rocblas_precision_string<T>,
-                          "--uplo",
-                          uplo_letter,
-                          "--transposeA",
-                          transA_letter,
-                          "--diag",
-                          diag_letter,
-                          "-m",
-                          m,
-                          "-k",
-                          k,
-                          "--lda",
-                          lda,
-                          "--incx",
-                          incx,
-                          "--batch_count",
-                          batch_count);
-            }
+                auto uplo_letter   = rocblas_fill_letter(uplo);
+                auto transA_letter = rocblas_transpose_letter(transA);
+                auto diag_letter   = rocblas_diag_letter(diag);
 
-            if(layer_mode & rocblas_layer_mode_log_profile)
-                log_profile(handle,
-                            rocblas_tbmv_name<T>,
-                            "uplo",
-                            uplo_letter,
-                            "transA",
-                            transA_letter,
-                            "diag",
-                            diag_letter,
-                            "M",
-                            m,
-                            "k",
-                            k,
-                            "lda",
-                            lda,
-                            "incx",
-                            incx,
-                            "batch_count",
-                            batch_count);
+                if(layer_mode & rocblas_layer_mode_log_trace)
+                    log_trace(handle,
+                              rocblas_tbmv_name<T>,
+                              uplo,
+                              transA,
+                              diag,
+                              m,
+                              k,
+                              A,
+                              lda,
+                              x,
+                              incx,
+                              batch_count);
+
+                if(layer_mode & rocblas_layer_mode_log_bench)
+                {
+                    log_bench(handle,
+                              "./rocblas-bench -f tbmv_batched -r",
+                              rocblas_precision_string<T>,
+                              "--uplo",
+                              uplo_letter,
+                              "--transposeA",
+                              transA_letter,
+                              "--diag",
+                              diag_letter,
+                              "-m",
+                              m,
+                              "-k",
+                              k,
+                              "--lda",
+                              lda,
+                              "--incx",
+                              incx,
+                              "--batch_count",
+                              batch_count);
+                }
+
+                if(layer_mode & rocblas_layer_mode_log_profile)
+                    log_profile(handle,
+                                rocblas_tbmv_name<T>,
+                                "uplo",
+                                uplo_letter,
+                                "transA",
+                                transA_letter,
+                                "diag",
+                                diag_letter,
+                                "M",
+                                m,
+                                "k",
+                                k,
+                                "lda",
+                                lda,
+                                "incx",
+                                incx,
+                                "batch_count",
+                                batch_count);
+            }
         }
 
-        if(m < 0 || k < 0 || lda < m || lda < 1 || !incx || k >= lda || batch_count < 0)
+        if(m < 0 || k < 0 || lda < k + 1 || !incx || batch_count < 0)
             return rocblas_status_invalid_size;
         if(!m || !batch_count)
             return handle->is_device_memory_size_query() ? rocblas_status_size_unchanged
@@ -116,10 +115,11 @@ namespace
             return handle->set_optimal_device_memory_size(sizeof(T) * m * batch_count,
                                                           sizeof(T*) * batch_count);
         auto mem = handle->device_malloc(sizeof(T) * m * batch_count, sizeof(T*) * batch_count);
+        if(!mem)
+            return rocblas_status_memory_error;
 
-        void* mem_x_copy;
-        void* mem_x_copy_arr;
-        std::tie(mem_x_copy, mem_x_copy_arr) = mem;
+        void* mem_x_copy     = mem[0];
+        void* mem_x_copy_arr = mem[1];
 
         setup_batched_array<256>(
             handle->rocblas_stream, (T*)mem_x_copy, m, (T**)mem_x_copy_arr, batch_count);

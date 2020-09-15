@@ -54,7 +54,7 @@ namespace
         // Google Test name suffix based on parameters
         static std::string name_suffix(const Arguments& arg)
         {
-            RocBLAS_TestName<spr_template> name;
+            RocBLAS_TestName<spr_template> name(arg.name);
 
             name << rocblas_datatype2string(arg.a_type);
 
@@ -83,6 +83,12 @@ namespace
                 if(SPR_TYPE == SPR_STRIDED_BATCHED || SPR_TYPE == SPR_BATCHED)
                     name << '_' << arg.batch_count;
             }
+
+            if(arg.fortran)
+            {
+                name << "_F";
+            }
+
             return std::move(name);
         }
     };
@@ -108,15 +114,15 @@ namespace
             if(!strcmp(arg.function, "spr"))
                 testing_spr<T>(arg);
             else if(!strcmp(arg.function, "spr_bad_arg"))
-                testing_spr_bad_arg<T>();
+                testing_spr_bad_arg<T>(arg);
             else if(!strcmp(arg.function, "spr_batched"))
                 testing_spr_batched<T>(arg);
             else if(!strcmp(arg.function, "spr_batched_bad_arg"))
-                testing_spr_batched_bad_arg<T>();
+                testing_spr_batched_bad_arg<T>(arg);
             else if(!strcmp(arg.function, "spr_strided_batched"))
                 testing_spr_strided_batched<T>(arg);
             else if(!strcmp(arg.function, "spr_strided_batched_bad_arg"))
-                testing_spr_strided_batched_bad_arg<T>();
+                testing_spr_strided_batched_bad_arg<T>(arg);
             else
                 FAIL() << "Internal error: Test called with unknown function: " << arg.function;
         }

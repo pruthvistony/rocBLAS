@@ -2,9 +2,9 @@
  * Copyright 2016-2020 Advanced Micro Devices, Inc.
  *
  * ************************************************************************ */
-#include "logging.h"
+#include "logging.hpp"
 #include "rocblas_trtri.hpp"
-#include "utility.h"
+#include "utility.hpp"
 
 namespace
 {
@@ -34,6 +34,20 @@ namespace
         if(!handle)
             return rocblas_status_invalid_handle;
 
+        // Temporarily change the thread's default device ID to the handle's device ID
+        auto saved_device_id = handle->push_device_id();
+
+        // Compute the optimal size for temporary device memory
+        size_t els   = rocblas_trtri_temp_size<NB>(n, 1);
+        size_t size  = els * batch_count * sizeof(T);
+        size_t sizep = batch_count * sizeof(T*);
+        if(handle->is_device_memory_size_query())
+        {
+            if(n <= NB || !batch_count)
+                return rocblas_status_size_unchanged;
+            return handle->set_optimal_device_memory_size(size, sizep);
+        }
+
         auto layer_mode = handle->layer_mode;
         if(layer_mode & rocblas_layer_mode_log_trace)
             log_trace(
@@ -56,25 +70,13 @@ namespace
                         batch_count);
 
         if(uplo != rocblas_fill_lower && uplo != rocblas_fill_upper)
-            return rocblas_status_not_implemented;
-        if(n < 0)
+            return rocblas_status_invalid_value;
+        if(n < 0 || lda < n || ldinvA < n || batch_count < 0)
             return rocblas_status_invalid_size;
-        if(!A)
-            return rocblas_status_invalid_pointer;
-        if(lda < n)
-            return rocblas_status_invalid_size;
-        if(!invA)
-            return rocblas_status_invalid_pointer;
-        if(ldinvA < n || batch_count < 0)
-            return rocblas_status_invalid_size;
-
-        // For small n or zero batch_count, and device memory size query, return size unchanged
-        if((n <= NB || !batch_count) && handle->is_device_memory_size_query())
-            return rocblas_status_size_unchanged;
-
-        // Quick return if possible.
         if(!n || !batch_count)
             return rocblas_status_success;
+        if(!A || !invA)
+            return rocblas_status_invalid_pointer;
 
         rocblas_status status;
         if(n <= NB)
@@ -84,32 +86,26 @@ namespace
         }
         else
         {
-            // Compute the optimal size for temporary device memory
-            size_t els   = rocblas_trtri_temp_size<NB>(n, 1);
-            size_t size  = els * batch_count * sizeof(T);
-            size_t sizep = batch_count * sizeof(T*);
-
-            // If size is queried, set optimal size
-            if(handle->is_device_memory_size_query())
-                return handle->set_optimal_device_memory_size(size, sizep);
-
             // Allocate memory
             auto mem = handle->device_malloc(size, sizep);
             if(!mem)
             {
                 return rocblas_status_memory_error;
             }
-            void* C_tmp;
-            void* C_tmp_arr;
-            std::tie(C_tmp, C_tmp_arr) = mem;
+            void* C_tmp     = mem[0];
+            void* C_tmp_arr = mem[1];
 
-            T* C_tmp_host[batch_count];
+            auto C_tmp_host = std::make_unique<T*[]>(batch_count);
             for(int b = 0; b < batch_count; b++)
             {
                 C_tmp_host[b] = (T*)C_tmp + b * els;
             }
-            RETURN_IF_HIP_ERROR(
-                hipMemcpy(C_tmp_arr, C_tmp_host, batch_count * sizeof(T*), hipMemcpyHostToDevice));
+
+            RETURN_IF_HIP_ERROR(hipMemcpyAsync(C_tmp_arr,
+                                               &C_tmp_host[0],
+                                               batch_count * sizeof(T*),
+                                               hipMemcpyHostToDevice,
+                                               handle->rocblas_stream));
 
             status = rocblas_trtri_large<NB, true, false, T>(handle,
                                                              uplo,

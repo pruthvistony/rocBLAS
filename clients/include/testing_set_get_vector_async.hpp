@@ -21,7 +21,7 @@ void testing_set_get_vector_async(const Arguments& arg)
     rocblas_int          incx = arg.incx;
     rocblas_int          incy = arg.incy;
     rocblas_int          incb = arg.incb;
-    rocblas_local_handle handle;
+    rocblas_local_handle handle(arg.atomics_mode);
 
     hipStream_t stream;
     rocblas_get_stream(handle, &stream);
@@ -35,11 +35,8 @@ void testing_set_get_vector_async(const Arguments& arg)
         host_vector<T>   hx(safe_size);
         host_vector<T>   hy(safe_size);
         device_vector<T> db(safe_size);
-        if(!db)
-        {
-            CHECK_HIP_ERROR(hipErrorOutOfMemory);
-            return;
-        }
+        CHECK_DEVICE_ALLOCATION(db.memcheck());
+
         EXPECT_ROCBLAS_STATUS(rocblas_set_vector_async(M, sizeof(T), hx, incx, db, incb, stream),
                               rocblas_status_invalid_size);
         EXPECT_ROCBLAS_STATUS(rocblas_get_vector_async(M, sizeof(T), db, incb, hy, incy, stream),
@@ -61,11 +58,7 @@ void testing_set_get_vector_async(const Arguments& arg)
 
     // allocate memory on device
     device_vector<T> db(M * size_t(incb));
-    if(!db)
-    {
-        CHECK_HIP_ERROR(hipErrorOutOfMemory);
-        return;
-    }
+    CHECK_DEVICE_ALLOCATION(db.memcheck());
 
     // Initial Data on CPU
     rocblas_seedrand();
@@ -81,11 +74,7 @@ void testing_set_get_vector_async(const Arguments& arg)
         CHECK_ROCBLAS_ERROR(rocblas_set_vector_async(M, sizeof(T), hp_x, incx, db, incb, stream));
         CHECK_ROCBLAS_ERROR(rocblas_get_vector_async(M, sizeof(T), db, incb, hp_y, incy, stream));
 
-        hipStreamSynchronize(stream);
-
-        cpu_time_used = get_time_us();
-
-        hy.assign(&hp_y[0], &hp_y[0] + M * incy); // copy to host_vector for _check_ compatibility
+        cpu_time_used = get_time_us_no_sync();
 
         // reference calculation
         for(int i = 0; i < M; i++)
@@ -93,8 +82,11 @@ void testing_set_get_vector_async(const Arguments& arg)
             hy_gold[i * incy] = hp_x[i * incx];
         }
 
-        cpu_time_used = get_time_us() - cpu_time_used;
+        cpu_time_used = get_time_us_no_sync() - cpu_time_used;
         cpu_bandwidth = (M * sizeof(T)) / cpu_time_used / 1e3;
+
+        hipStreamSynchronize(stream);
+        hy.assign(&hp_y[0], &hp_y[0] + M * incy); // copy to host_vector for _check_ compatibility
 
         if(arg.unit_check)
         {
@@ -109,31 +101,32 @@ void testing_set_get_vector_async(const Arguments& arg)
 
     if(arg.timing)
     {
-        int number_timing_iterations = 10;
-        gpu_time_used                = get_time_us(); // in microseconds
+        int         number_timing_iterations = arg.iters;
+        hipStream_t stream;
+        CHECK_ROCBLAS_ERROR(rocblas_get_stream(handle, &stream));
+        gpu_time_used = get_time_us_sync(stream); // in microseconds
 
         for(int iter = 0; iter < number_timing_iterations; iter++)
         {
             rocblas_set_vector_async(M, sizeof(T), hp_x, incx, db, incb, stream);
             rocblas_get_vector_async(M, sizeof(T), db, incb, hp_y, incy, stream);
         }
-        hipStreamSynchronize(stream);
 
-        gpu_time_used     = get_time_us() - gpu_time_used;
+        gpu_time_used     = get_time_us_sync(stream) - gpu_time_used;
         rocblas_bandwidth = (M * sizeof(T)) / gpu_time_used / 1e3 / number_timing_iterations;
 
-        std::cout << "M,incx,incy,incb,rocblas-GB/s";
+        rocblas_cout << "M,incx,incy,incb,rocblas-GB/s";
 
         if(arg.norm_check && cpu_bandwidth != std::numeric_limits<T>::infinity())
-            std::cout << ",CPU-GB/s";
+            rocblas_cout << ",CPU-GB/s";
 
-        std::cout << std::endl;
+        rocblas_cout << std::endl;
 
-        std::cout << M << "," << incx << "," << incy << "," << incb << "," << rocblas_bandwidth;
+        rocblas_cout << M << "," << incx << "," << incy << "," << incb << "," << rocblas_bandwidth;
 
         if(arg.norm_check && cpu_bandwidth != std::numeric_limits<T>::infinity())
-            std::cout << "," << cpu_bandwidth;
+            rocblas_cout << "," << cpu_bandwidth;
 
-        std::cout << std::endl;
+        rocblas_cout << std::endl;
     }
 }

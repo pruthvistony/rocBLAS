@@ -3,13 +3,10 @@
  * ************************************************************************ */
 #ifndef __ROCBLAS_SYRK_HPP__
 #define __ROCBLAS_SYRK_HPP__
-
-#include "handle.h"
-#include "rocblas.h"
-#include "utility.h"
+#include "handle.hpp"
 
 template <typename T, typename U>
-static __device__ void syrk_scale_device(bool upper, rocblas_int n, T beta, U* C, rocblas_int ldc)
+__device__ void syrk_scale_device(bool upper, rocblas_int n, T beta, U* C, rocblas_int ldc)
 {
     auto tx = blockIdx.x * blockDim.x + threadIdx.x;
     auto ty = blockIdx.y * blockDim.y + threadIdx.y;
@@ -48,14 +45,14 @@ __global__ void syrk_scale_kernel(bool           upper,
   * kernel
   */
 template <bool HERM, bool TRANSA, rocblas_int TILE_NK, typename T, typename U>
-static __device__ void syrk_herk_mult_add_device(bool        upper,
-                                                 rocblas_int n,
-                                                 rocblas_int k,
-                                                 U           alpha,
-                                                 const T* __restrict__ A,
-                                                 rocblas_int lda,
-                                                 T* __restrict__ C,
-                                                 rocblas_int ldc)
+__device__ void syrk_herk_mult_add_device(bool        upper,
+                                          rocblas_int n,
+                                          rocblas_int k,
+                                          U           alpha,
+                                          const T* __restrict__ A,
+                                          rocblas_int lda,
+                                          T* __restrict__ C,
+                                          rocblas_int ldc)
 {
     __shared__ T atile[TILE_NK][TILE_NK];
     __shared__ T btile[TILE_NK][TILE_NK];
@@ -109,7 +106,7 @@ static __device__ void syrk_herk_mult_add_device(bool        upper,
 
         __syncthreads();
 
-        // n x n symmetric/hermitian output, tile zero where invalid
+        // n x n symmetric/Hermitian output, tile zero where invalid
         if(row < n && col < n && from <= to)
         {
             T sum = T(0);
@@ -168,22 +165,22 @@ __global__ void syrk_herk_kernel(bool              upper,
 }
 
 template <typename TScal, typename TConstPtr, typename TPtr>
-rocblas_status rocblas_syrk_arg_check(rocblas_handle    handle,
-                                      rocblas_fill      uplo,
-                                      rocblas_operation transA,
-                                      rocblas_int       n,
-                                      rocblas_int       k,
-                                      TScal             alpha,
-                                      TConstPtr         AP,
-                                      rocblas_int       offsetA,
-                                      rocblas_int       lda,
-                                      rocblas_stride    strideA,
-                                      TScal             beta,
-                                      TPtr              CP,
-                                      rocblas_int       offsetC,
-                                      rocblas_int       ldc,
-                                      rocblas_stride    strideC,
-                                      rocblas_int       batch_count)
+inline rocblas_status rocblas_syrk_arg_check(rocblas_handle    handle,
+                                             rocblas_fill      uplo,
+                                             rocblas_operation transA,
+                                             rocblas_int       n,
+                                             rocblas_int       k,
+                                             TScal             alpha,
+                                             TConstPtr         AP,
+                                             rocblas_int       offsetA,
+                                             rocblas_int       lda,
+                                             rocblas_stride    strideA,
+                                             TScal             beta,
+                                             TPtr              CP,
+                                             rocblas_int       offsetC,
+                                             rocblas_int       ldc,
+                                             rocblas_stride    strideC,
+                                             rocblas_int       batch_count)
 {
     if(uplo != rocblas_fill_lower && uplo != rocblas_fill_upper)
         return rocblas_status_invalid_value;
@@ -200,28 +197,29 @@ rocblas_status rocblas_syrk_arg_check(rocblas_handle    handle,
 
     return rocblas_status_continue;
 }
+
 /**
   *  TScal     is always: const T* (either host or device)
   *  TConstPtr is either: const T* OR const T* const*
   *  TPtr      is either:       T* OR       T* const*
   */
 template <typename TScal, typename TConstPtr, typename TPtr>
-rocblas_status rocblas_syrk_template(rocblas_handle    handle,
-                                     rocblas_fill      uplo,
-                                     rocblas_operation transA,
-                                     rocblas_int       n,
-                                     rocblas_int       k,
-                                     TScal             alpha,
-                                     TConstPtr         AP,
-                                     rocblas_int       offsetA,
-                                     rocblas_int       lda,
-                                     rocblas_stride    strideA,
-                                     TScal             beta,
-                                     TPtr              CP,
-                                     rocblas_int       offsetC,
-                                     rocblas_int       ldc,
-                                     rocblas_stride    strideC,
-                                     rocblas_int       batch_count)
+ROCBLAS_EXPORT_NOINLINE rocblas_status rocblas_syrk_template(rocblas_handle    handle,
+                                                             rocblas_fill      uplo,
+                                                             rocblas_operation transA,
+                                                             rocblas_int       n,
+                                                             rocblas_int       k,
+                                                             TScal             alpha,
+                                                             TConstPtr         AP,
+                                                             rocblas_int       offsetA,
+                                                             rocblas_int       lda,
+                                                             rocblas_stride    strideA,
+                                                             TScal             beta,
+                                                             TPtr              CP,
+                                                             rocblas_int       offsetC,
+                                                             rocblas_int       ldc,
+                                                             rocblas_stride    strideC,
+                                                             rocblas_int       batch_count)
 {
     // quick return
     if(!n || !batch_count)
@@ -239,6 +237,9 @@ rocblas_status rocblas_syrk_template(rocblas_handle    handle,
     rocblas_int          by          = (n - 1) / (SYRK_DIM_XY) + 1;
     dim3                 syrk_grid(bx, by, batch_count);
     dim3                 syrk_threads(SYRK_DIM_XY, SYRK_DIM_XY);
+
+    // Temporarily change the thread's default device ID to the handle's device ID
+    auto saved_device_id = handle->push_device_id();
 
     // Launch a herk kernel for syrk.
     if(handle->pointer_mode == rocblas_pointer_mode_device)

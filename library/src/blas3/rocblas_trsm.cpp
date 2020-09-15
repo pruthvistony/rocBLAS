@@ -4,14 +4,11 @@
 
 #include "rocblas_trsm.hpp"
 #include "gemm.hpp"
-#include "handle.h"
-#include "logging.h"
+#include "handle.hpp"
+#include "logging.hpp"
 #include "rocblas.h"
 #include "trtri_trsm.hpp"
-#include "utility.h"
-#include <algorithm>
-#include <cstdio>
-#include <tuple>
+#include "utility.hpp"
 
 namespace
 {
@@ -150,44 +147,38 @@ namespace
             }
         }
 
-        // quick return if possible.
-        // return status_size_unchanged if device memory size query
-        if(!m || !n)
-            return handle->is_device_memory_size_query() ? rocblas_status_size_unchanged
-                                                         : rocblas_status_success;
-        /////////////////////
-        // ARGUMENT CHECKS //
-        /////////////////////
         if(uplo != rocblas_fill_lower && uplo != rocblas_fill_upper)
-            return rocblas_status_not_implemented;
-        if(m < 0 || n < 0)
-            return rocblas_status_invalid_size;
-        if(!alpha || !A)
-            return rocblas_status_invalid_pointer;
+            return rocblas_status_invalid_value;
 
         // A is of size lda*k
         rocblas_int k = side == rocblas_side_left ? m : n;
+        if(m < 0 || n < 0 || lda < k || ldb < m)
+            return rocblas_status_invalid_size;
 
-        if(lda < k)
-            return rocblas_status_invalid_size;
-        if(!B)
+        // quick return if possible.
+        if(!m || !n)
+            return handle->is_device_memory_size_query() ? rocblas_status_size_unchanged
+                                                         : rocblas_status_success;
+        if(!alpha || !A || !B)
             return rocblas_status_invalid_pointer;
-        if(ldb < m)
-            return rocblas_status_invalid_size;
 
         //////////////////////
         // MEMORY MANAGEMENT//
         //////////////////////
-        void*          mem_x_temp;
-        void*          mem_x_temp_arr;
-        void*          mem_invA;
-        void*          mem_invA_arr;
-        bool           optimal_mem;
+
+        // Proxy object holds the allocation. It must stay alive as long as mem_* pointers below are alive.
+        auto  mem = handle->device_malloc(0);
+        void* mem_x_temp;
+        void* mem_x_temp_arr;
+        void* mem_invA;
+        void* mem_invA_arr;
+
         rocblas_status perf_status = rocblas_trsm_template_mem<BLOCK, false, T>(handle,
                                                                                 side,
                                                                                 m,
                                                                                 n,
                                                                                 1,
+                                                                                mem,
                                                                                 mem_x_temp,
                                                                                 mem_x_temp_arr,
                                                                                 mem_invA,
@@ -199,7 +190,7 @@ namespace
         if(perf_status != rocblas_status_success && perf_status != rocblas_status_perf_degraded)
             return perf_status;
 
-        optimal_mem = perf_status == rocblas_status_success;
+        bool optimal_mem = perf_status == rocblas_status_success;
 
         rocblas_status status = rocblas_trsm_template<BLOCK, false, T>(handle,
                                                                        side,

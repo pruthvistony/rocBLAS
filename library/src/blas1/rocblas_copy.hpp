@@ -1,10 +1,8 @@
 /* ************************************************************************
  * Copyright 2016-2020 Advanced Micro Devices, Inc.
  * ************************************************************************ */
-#include "handle.h"
-#include "logging.h"
-#include "rocblas.h"
-#include "utility.h"
+#pragma once
+#include "handle.hpp"
 
 template <bool CONJ, typename U, typename V>
 __global__ void copy_kernel(rocblas_int    n,
@@ -17,12 +15,11 @@ __global__ void copy_kernel(rocblas_int    n,
                             rocblas_int    incy,
                             rocblas_stride stridey)
 {
-    ptrdiff_t tid = hipBlockIdx_x * hipBlockDim_x + hipThreadIdx_x;
-    // bound
+    ptrdiff_t   tid = hipBlockIdx_x * hipBlockDim_x + hipThreadIdx_x;
+    const auto* x   = load_ptr_batch(xa, hipBlockIdx_y, shiftx, stridex);
+    auto*       y   = load_ptr_batch(ya, hipBlockIdx_y, shifty, stridey);
     if(tid < n)
     {
-        const auto* x = load_ptr_batch(xa, hipBlockIdx_y, shiftx, stridex);
-        auto*       y = load_ptr_batch(ya, hipBlockIdx_y, shifty, stridey);
 
         y[tid * incy] = CONJ ? conj(x[tid * incx]) : x[tid * incx];
     }
@@ -42,28 +39,29 @@ rocblas_status rocblas_copy_template(rocblas_handle handle,
                                      rocblas_int    batch_count)
 {
     // Quick return if possible.
-    if(n <= 0 || !batch_count)
+    if(n <= 0 || batch_count <= 0)
         return rocblas_status_success;
 
     if(!x || !y)
         return rocblas_status_invalid_pointer;
 
-    if(batch_count < 0)
-        return rocblas_status_invalid_size;
-
     // in case of negative inc shift pointer to end of data for negative indexing tid*inc
     ptrdiff_t shiftx = offsetx - ((incx < 0) ? ptrdiff_t(incx) * (n - 1) : 0);
     ptrdiff_t shifty = offsety - ((incy < 0) ? ptrdiff_t(incy) * (n - 1) : 0);
 
-    int  blocks = (n - 1) / NB + 1;
-    dim3 grid(blocks, batch_count);
-    dim3 threads(NB);
+    int         blocks = (n - 1) / NB + 1;
+    dim3        grid(blocks, batch_count);
+    dim3        threads(NB);
+    hipStream_t my_stream = handle->rocblas_stream;
+
+    // Temporarily change the thread's default device ID to the handle's device ID
+    auto saved_device_id = handle->push_device_id();
 
     hipLaunchKernelGGL(copy_kernel<CONJ>,
                        grid,
                        threads,
                        0,
-                       handle->rocblas_stream,
+                       my_stream,
                        n,
                        x,
                        shiftx,

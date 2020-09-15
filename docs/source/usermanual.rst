@@ -8,10 +8,11 @@ User Guide
    :maxdepth: 3
    :caption: Contents:
 
+   disclaimer
    intro
    install
-   exports
-   logging
-   streams
-   device_memory
    api
+   logging
+   handle_stream_device
+   device_memory
+   functions

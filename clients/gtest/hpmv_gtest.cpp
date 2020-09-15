@@ -53,7 +53,7 @@ namespace
         // Google Test name suffix based on parameters
         static std::string name_suffix(const Arguments& arg)
         {
-            RocBLAS_TestName<hpmv_template> name;
+            RocBLAS_TestName<hpmv_template> name(arg.name);
 
             name << rocblas_datatype2string(arg.a_type) << '_' << (char)std::toupper(arg.uplo)
                  << '_' << arg.N << '_' << arg.alpha;
@@ -74,12 +74,17 @@ namespace
             if(HPMV_TYPE == HPMV_STRIDED_BATCHED || HPMV_TYPE == HPMV_BATCHED)
                 name << '_' << arg.batch_count;
 
+            if(arg.fortran)
+            {
+                name << "_F";
+            }
+
             return std::move(name);
         }
     };
 
     // By default, arbitrary type combinations are invalid.
-    // The unnamed second parameter is used for enable_if below.
+    // The unnamed second parameter is used for enable_if_t below.
     template <typename, typename = void>
     struct hpmv_testing : rocblas_test_invalid
     {
@@ -89,8 +94,8 @@ namespace
     // is valid. When the condition is false, this specialization does not apply.
     template <typename T>
     struct hpmv_testing<T,
-                        typename std::enable_if<std::is_same<T, rocblas_float_complex>{}
-                                                || std::is_same<T, rocblas_double_complex>{}>::type>
+                        std::enable_if_t<std::is_same<T, rocblas_float_complex>{}
+                                         || std::is_same<T, rocblas_double_complex>{}>>
         : rocblas_test_valid
     {
         void operator()(const Arguments& arg)

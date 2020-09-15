@@ -53,7 +53,7 @@ namespace
         // Google Test name suffix based on parameters
         static std::string name_suffix(const Arguments& arg)
         {
-            RocBLAS_TestName<hemv_template> name;
+            RocBLAS_TestName<hemv_template> name(arg.name);
 
             name << rocblas_datatype2string(arg.a_type) << '_' << (char)std::toupper(arg.uplo)
                  << '_' << arg.N << '_' << arg.alpha << '_' << arg.lda;
@@ -73,6 +73,11 @@ namespace
 
             if(HEMV_TYPE == HEMV_STRIDED_BATCHED || HEMV_TYPE == HEMV_BATCHED)
                 name << '_' << arg.batch_count;
+
+            if(arg.fortran)
+            {
+                name << "_F";
+            }
 
             return std::move(name);
         }

@@ -33,16 +33,16 @@ if( BUILD_WITH_TENSILE )
     set( ROCBLAS_SHARED_LIBS ON )
     set( BUILD_SHARED_LIBS OFF )
   else( )
+    set( ROCBLAS_SHARED_LIBS OFF )
     if( BUILD_WITH_TENSILE_HOST )
-        #list( APPEND package_targets Tensile TensileHost )
-      list( APPEND package_targets TensileHost )
+      #list( APPEND package_targets Tensile TensileHost )
     else()
       list( APPEND package_targets Tensile )
     endif()
   endif( )
 
   set( Tensile_RUNTIME_LANGUAGE "HIP" )
-  message( STATUS "AMDGPU_TARGETS=${AMDGPU_TARGETS}" )
+  message( STATUS "ROCBLAS_GPUS=${ROCBLAS_GPUS}" )
   if( BUILD_WITH_TENSILE_HOST )
     #TODO update when this feature has been validated
     #set( PACKAGE_TENSILE_LIBRARY ON )
@@ -58,6 +58,7 @@ if( BUILD_WITH_TENSILE )
       ${Tensile_COMPILER}
       ${Tensile_CODE_OBJECT_VERSION}
       ${Tensile_ARCHITECTURE}
+      ${Tensile_LIBRARY_FORMAT}
       ${Tensile_MERGE_FILES}
       ${Tensile_SHORT_FILENAMES}
       ${Tensile_PRINT_DEBUG}
@@ -65,33 +66,22 @@ if( BUILD_WITH_TENSILE )
       ${USE_LEGACY_CODE}
    )
 
-  ## Create a unique name for Tensile compiled for rocBLAS
-  #  set_target_properties( Tensile PROPERTIES OUTPUT_NAME tensile-rocblas CXX_EXTENSIONS NO )
   # build gemm with Tensile Host library
   if( BUILD_WITH_TENSILE_HOST )
-      # Create a unique name for Tensile compiled for rocBLAS
-      set_target_properties( TensileHost PROPERTIES OUTPUT_NAME tensile-rocblas CXX_EXTENSIONS NO )
-      #target_compile_definitions( Tensile PUBLIC USE_TENSILE_HOST )
-      target_compile_definitions( TensileHost PUBLIC USE_TENSILE_HOST )
-      #endif()
+    # Create a unique name for TensileHost compiled for rocBLAS
+    set_target_properties( TensileHost PROPERTIES OUTPUT_NAME rocblas-tensile CXX_EXTENSIONS NO )
+    target_compile_definitions( TensileHost PUBLIC USE_TENSILE_HOST )
   else()
     # Create a unique name for Tensile compiled for rocBLAS
-    set_target_properties( Tensile PROPERTIES OUTPUT_NAME tensile-rocblas CXX_EXTENSIONS NO )
-
-    target_compile_features( Tensile PRIVATE cxx_static_assert cxx_nullptr cxx_auto_type )
-    # Remove this check when we no longer build with older rocm stack(ie < 1.8.2)
-    if(TARGET hip::device)
-      target_link_libraries( Tensile PRIVATE hip::device )
-    else()
-      target_link_libraries( Tensile PRIVATE hip::hip_hcc hip::hip_device hcc::hccshared )
-    endif()
+    set_target_properties( Tensile PROPERTIES OUTPUT_NAME rocblas-tensile CXX_EXTENSIONS NO )
+    target_link_libraries( Tensile PRIVATE hip::device )
   endif()
 
   if( CMAKE_CXX_COMPILER MATCHES ".*/hcc$" )
     # Remove following when hcc is fixed; hcc emits following spurious warning ROCm v1.6.1
     # "clang-5.0: warning: argument unused during compilation: '-isystem /opt/rocm/include'"
     # target_compile_options( Tensile PRIVATE -Wno-unused-command-line-argument -fno-gpu-rdc -Wno-deprecated-declarations)
-    foreach( target ${AMDGPU_TARGETS} )
+    foreach( target ${ROCBLAS_GPUS} )
       if( BUILD_WITH_TENSILE_HOST )
           # Remove following when hcc is fixed; hcc emits following spurious warning ROCm v1.6.1
           # "clang-5.0: warning: argument unused during compilation: '-isystem /opt/rocm/include'"
@@ -102,6 +92,16 @@ if( BUILD_WITH_TENSILE )
           # "clang-5.0: warning: argument unused during compilation: '-isystem /opt/rocm/include'"
           target_compile_options( Tensile PRIVATE -Wno-unused-command-line-argument -fno-gpu-rdc -Wno-deprecated-declarations)
           target_compile_options( Tensile PRIVATE --amdgpu-target=${target} )
+      endif()
+    endforeach( )
+  endif( )
+
+  if( CMAKE_CXX_COMPILER MATCHES ".*/hipcc$" )
+    foreach( target ${ROCBLAS_GPUS} )
+      if( BUILD_WITH_TENSILE_HOST )
+        target_compile_options( TensileHost PRIVATE --cuda-gpu-arch=${target} )
+      else()
+        target_compile_options( Tensile PRIVATE --cuda-gpu-arch=${target} )
       endif()
     endforeach( )
   endif( )
@@ -125,6 +125,8 @@ if( BUILD_WITH_TENSILE )
     blas3/rocblas_trsm_batched.cpp
     blas3/rocblas_trsm_strided_batched.cpp
     blas3/rocblas_trmm.cpp
+    blas3/rocblas_trmm_batched.cpp
+    blas3/rocblas_trmm_strided_batched.cpp
   )
 
   set( Tensile_INC
@@ -135,13 +137,13 @@ if( BUILD_WITH_TENSILE )
     blas_ex/rocblas_gemm_ex.cpp
     blas_ex/rocblas_gemm_batched_ex.cpp
     blas_ex/rocblas_gemm_strided_batched_ex.cpp
+    blas_ex/rocblas_gemm_ext2.cpp
   )
 
   set( rocblas_blas3_source
     blas3/rocblas_trtri.cpp
     blas3/rocblas_trtri_batched.cpp
     blas3/rocblas_trtri_strided_batched.cpp
-    blas3/rocblas_geam.cpp
     ${Tensile_SRC}
   )
 
@@ -153,19 +155,43 @@ if( BUILD_WITH_TENSILE )
 
 endif( ) # BUILD_WITH_TENSILE
 
+set (rocblas_ex_source_no_tensile
+    blas_ex/rocblas_axpy_ex.cpp
+    blas_ex/rocblas_axpy_batched_ex.cpp
+    blas_ex/rocblas_axpy_strided_batched_ex.cpp
+)
+
 set( rocblas_blas3_source_no_tensile
+    blas3/rocblas_dgmm.cpp
+    blas3/rocblas_dgmm_batched.cpp
+    blas3/rocblas_dgmm_strided_batched.cpp
+    blas3/rocblas_geam.cpp
+    blas3/rocblas_geam_batched.cpp
+    blas3/rocblas_geam_strided_batched.cpp
+    blas3/rocblas_hemm.cpp
+    blas3/rocblas_hemm_batched.cpp
+    blas3/rocblas_hemm_strided_batched.cpp
     blas3/rocblas_herk.cpp
     blas3/rocblas_herk_batched.cpp
     blas3/rocblas_herk_strided_batched.cpp
     blas3/rocblas_her2k.cpp
     blas3/rocblas_her2k_batched.cpp
     blas3/rocblas_her2k_strided_batched.cpp
+    blas3/rocblas_herkx.cpp
+    blas3/rocblas_herkx_batched.cpp
+    blas3/rocblas_herkx_strided_batched.cpp
+    blas3/rocblas_symm.cpp
+    blas3/rocblas_symm_batched.cpp
+    blas3/rocblas_symm_strided_batched.cpp
     blas3/rocblas_syrk.cpp
     blas3/rocblas_syrk_batched.cpp
     blas3/rocblas_syrk_strided_batched.cpp
     blas3/rocblas_syr2k.cpp
     blas3/rocblas_syr2k_batched.cpp
     blas3/rocblas_syr2k_strided_batched.cpp
+    blas3/rocblas_syrkx.cpp
+    blas3/rocblas_syrkx_batched.cpp
+    blas3/rocblas_syrkx_strided_batched.cpp
 )
 
 set( rocblas_blas2_source
@@ -179,6 +205,9 @@ set( rocblas_blas2_source
   blas2/rocblas_gbmv.cpp
   blas2/rocblas_gbmv_batched.cpp
   blas2/rocblas_gbmv_strided_batched.cpp
+  blas2/rocblas_tbsv.cpp
+  blas2/rocblas_tbsv_batched.cpp
+  blas2/rocblas_tbsv_strided_batched.cpp
   blas2/rocblas_trmv.cpp
   blas2/rocblas_trmv_batched.cpp
   blas2/rocblas_trmv_strided_batched.cpp
@@ -221,6 +250,9 @@ set( rocblas_blas2_source
   blas2/rocblas_tbmv.cpp
   blas2/rocblas_tbmv_batched.cpp
   blas2/rocblas_tbmv_strided_batched.cpp
+  blas2/rocblas_tpsv.cpp
+  blas2/rocblas_tpsv_batched.cpp
+  blas2/rocblas_tpsv_strided_batched.cpp
   blas2/rocblas_sbmv.cpp
   blas2/rocblas_sbmv_batched.cpp
   blas2/rocblas_sbmv_strided_batched.cpp
@@ -236,6 +268,7 @@ set( rocblas_auxiliary_source
   handle.cpp
   rocblas_auxiliary.cpp
   buildinfo.cpp
+  rocblas_ostream.cpp
 )
 
 set( rocblas_blas1_source
@@ -280,10 +313,17 @@ set( rocblas_blas1_source
   blas1/rocblas_swap_strided_batched.cpp
 )
 
+set(rocblas_f90_source
+    rocblas_module.f90
+)
+
 prepend_path( ".." rocblas_headers_public relative_rocblas_headers_public )
+
+
 
 add_library( rocblas
   ${rocblas_ex_source}
+  ${rocblas_ex_source_no_tensile}
   ${rocblas_blas3_source}
   ${rocblas_blas3_source_no_tensile}
   ${rocblas_blas2_source}
@@ -292,6 +332,9 @@ add_library( rocblas
   ${rocblas_auxiliary_source}
 )
 
+# Create rocBLAS Fortran module
+add_library(rocblas_fortran ${rocblas_f90_source})
+
 add_library( roc::rocblas ALIAS rocblas )
 
 # RUNPATH is set only when ROCM_RPATH is defined in the ENV
@@ -299,30 +342,48 @@ if( DEFINED ENV{ROCM_RPATH} )
   set ( CMAKE_SHARED_LINKER_FLAGS " -Wl,--enable-new-dtags -Wl,--rpath,$ENV{ROCM_RPATH}" )
 endif( )
 
-# Remove this check when we no longer build with older rocm stack(ie < 1.8.2)
-if(TARGET hip::device)
-target_link_libraries( rocblas PRIVATE hip::device )
-else()
-target_link_libraries( rocblas PRIVATE hip::hip_hcc hip::hip_device hcc::hccshared )
-endif()
+
+target_link_libraries( rocblas INTERFACE hip::host )
+target_link_libraries( rocblas PRIVATE hip::device --rtlib=compiler-rt --unwindlib=libgcc )
 
 set_target_properties( rocblas PROPERTIES CXX_STANDARD 14 CXX_STANDARD_REQUIRED ON )
-
-target_compile_definitions( rocblas PRIVATE ROCBLAS_LIBRARY_CHECKS )
 
 if( CMAKE_CXX_COMPILER MATCHES ".*/hcc$" )
   # Remove following when hcc is fixed; hcc emits following spurious warning ROCm v1.6.1
   # "clang-5.0: warning: argument unused during compilation: '-isystem /opt/rocm/include'"
   target_compile_options( rocblas PRIVATE -Wno-unused-command-line-argument -fno-gpu-rdc )
-  foreach( target ${AMDGPU_TARGETS} )
+  foreach( target ${ROCBLAS_GPUS} )
     target_compile_options( rocblas PRIVATE --amdgpu-target=${target} )
   endforeach( )
 endif( )
 
+if( CMAKE_CXX_COMPILER MATCHES ".*/hipcc$" )
+  # GCC or hip-clang needs specific flags to turn on f16c intrinsics
+  target_compile_options( rocblas PRIVATE -mf16c )
+  # xnack compile option for library
+  target_compile_options(rocblas PRIVATE -mno-xnack)
+  set(gfx906_options "-Xarch_gfx906 -msram-ecc")
+  set(gfx908_options "-Xarch_gfx908 -msram-ecc")
+  if(CMAKE_VERSION VERSION_LESS 3.12)
+      set_target_properties(rocblas PROPERTIES COMPILE_FLAGS "${gfx906_options} ${gfx908_options}")
+  else()
+      target_compile_options(rocblas PRIVATE "SHELL:${gfx906_options}" "SHELL:${gfx908_options}")
+  endif()
+  foreach( target ${ROCBLAS_GPUS} )
+    message( STATUS "TARGET: " ${target} )
+    target_compile_options( rocblas PRIVATE --cuda-gpu-arch=${target} )
+    target_link_libraries( rocblas PRIVATE --cuda-gpu-arch=${target} )
+  endforeach( )
+endif( )
+
+# Do not allow Variable Length Arrays (use unique_ptr instead)
+target_compile_options( rocblas PRIVATE -Werror=vla )
+
 target_include_directories( rocblas
   PUBLIC  $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/library/include>
+          $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/library/include/internal>
           $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-          $<BUILD_INTERFACE:${PROJECT_BINARY_DIR}/include>
+          $<BUILD_INTERFACE:${PROJECT_BINARY_DIR}/include/internal>
           $<BUILD_INTERFACE:${Tensile_INC}>
           $<INSTALL_INTERFACE:include>
           )
@@ -331,10 +392,55 @@ target_include_directories( rocblas
 # 1.  rocblas header 'rocblas-types.h' exposes the hip header hip/hip_vector_types.h, requiring clients to find hip headers
 # target_include_directories( rocblas SYSTEM PUBLIC ${HIP_INCLUDE_DIRS} )
 
+target_link_libraries( rocblas PRIVATE "-Xlinker --exclude-libs=ALL" ) # HIDE symbols
+
 if( BUILD_WITH_TENSILE )
   if( BUILD_WITH_TENSILE_HOST )
       #target_link_libraries( rocblas PRIVATE Tensile TensileHost )
-    target_link_libraries( rocblas PRIVATE TensileHost )
+      if( BUILD_SHARED_LIBS )
+        target_link_libraries( rocblas PRIVATE TensileHost )
+      else()
+        target_compile_definitions( rocblas PRIVATE ROCBLAS_STATIC_LIB )
+
+        # bypassing cmake dependencies chain for static link as it won't allow target from different directory
+
+        # including tensile headers into rocblas tensileHost client so get compile properties
+        get_target_property(TensileHost_INCLUDES TensileHost INCLUDE_DIRECTORIES)
+        target_include_directories( rocblas PRIVATE ${TensileHost_INCLUDES} )
+        get_target_property(TensileHost_DEFINES TensileHost COMPILE_DEFINITIONS)
+        target_compile_definitions( rocblas PRIVATE ${TensileHost_DEFINES} )
+
+        get_target_property( TensileHost_LIBDIR TensileHost BINARY_DIR )
+
+        message (STATUS "TensileHost_INCLUDES == ${TensileHost_INCLUDES}")
+        message (STATUS "TensileHost_DEFINES == ${TensileHost_DEFINES}")
+        message (STATUS "TensileHost_LIBDIR == ${TensileHost_LIBDIR}")
+
+        # recreate LLVM static dependencies
+        if (${Tensile_LIBRARY_FORMAT} STREQUAL "yaml")
+          find_package(LLVM 6.0 QUIET CONFIG)
+          if(NOT LLVM_FOUND)
+              find_package(LLVM 7.0 QUIET CONFIG)
+              if(NOT LLVM_FOUND)
+                  find_package(LLVM 9.0 QUIET CONFIG)
+                  if(NOT LLVM_FOUND)
+                      find_package(LLVM REQUIRED CONFIG)
+                  endif()
+              endif()
+          endif()
+          find_library(LLVMObjectYAML_LIBRARY
+            NAMES LLVMObjectYAML
+            PATHS ${LLVM_LIBRARY_DIR})
+          message("LLVMObjectYAML_LIBRARY: ${LLVMObjectYAML_LIBRARY}")
+
+          target_link_libraries(rocblas PRIVATE LLVMObjectYAML )  # match tensile
+        endif()
+
+        # to get TensileHost built first, not to link target
+        # as dependency chain can not be created
+        add_dependencies(rocblas TensileHost)
+
+      endif()
   else()
     target_link_libraries( rocblas PRIVATE Tensile )
   endif()
@@ -344,22 +450,68 @@ if( BUILD_WITH_TENSILE )
   endif()
 endif()
 
+target_compile_definitions( rocblas PRIVATE ROCM_USE_FLOAT16 )
+
 rocm_set_soversion( rocblas ${rocblas_SOVERSION} )
 set_target_properties( rocblas PROPERTIES CXX_EXTENSIONS NO )
 set_target_properties( rocblas PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/staging" )
 
 # Package that helps me set visibility for function names exported from shared library
 include( GenerateExportHeader )
-set_target_properties( rocblas PROPERTIES CXX_VISIBILITY_PRESET "hidden" VISIBILITY_INLINES_HIDDEN ON )
-generate_export_header( rocblas EXPORT_FILE_NAME ${PROJECT_BINARY_DIR}/include/rocblas-export.h )
+set_target_properties( rocblas PROPERTIES CXX_VISIBILITY_PRESET "hidden" C_VISIBILITY_PRESET "hidden" VISIBILITY_INLINES_HIDDEN ON )
+generate_export_header( rocblas EXPORT_FILE_NAME ${PROJECT_BINARY_DIR}/include/internal/rocblas-export.h )
 
-# Following Boost conventions of prefixing 'lib' on static built libraries, across all platforms
+# generate header with prototypes for export reuse
+set( ROCBLAS_PROTO_TEMPLATES "${PROJECT_BINARY_DIR}/include/internal/rocblas-exported-proto.hpp" )
+add_custom_target( rocblas_proto_templates
+  BYPRODUCTS ${ROCBLAS_PROTO_TEMPLATES}
+  COMMAND python3 template-proto.py ${CMAKE_CURRENT_SOURCE_DIR}/blas3/Tensile/*.hpp ${CMAKE_CURRENT_SOURCE_DIR}/blas3/*.hpp ${CMAKE_CURRENT_SOURCE_DIR}/blas2/*.hpp ${CMAKE_CURRENT_SOURCE_DIR}/blas1/*.hpp > ${ROCBLAS_PROTO_TEMPLATES}
+  DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}
+  COMMENT "Generating prototypes from ${CMAKE_CURRENT_SOURCE_DIR}."
+  WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+  )
+add_dependencies( rocblas rocblas_proto_templates )
+
+# generate rocblas_device_malloc.hpp header for device memory allocation
+set( ROCBLAS_DEVICE_MALLOC "${PROJECT_BINARY_DIR}/include/internal/rocblas_device_malloc.hpp" )
+add_custom_target( rocblas_device_malloc
+  BYPRODUCTS ${ROCBLAS_DEVICE_MALLOC}
+  COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_SOURCE_DIR}/include/rocblas_device_malloc.hpp ${ROCBLAS_DEVICE_MALLOC}
+  DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/include/rocblas_device_malloc.hpp
+  COMMENT "Generating ${ROCBLAS_DEVICE_MALLOC}"
+  WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+)
+add_dependencies( rocblas rocblas_device_malloc )
+
 if( NOT BUILD_SHARED_LIBS )
+  # Following Boost conventions of prefixing 'lib' on static built libraries, across all platforms
   set_target_properties( rocblas PROPERTIES PREFIX "lib" )
+
+  if( BUILD_WITH_TENSILE AND BUILD_WITH_TENSILE_HOST )
+    add_custom_command( TARGET rocblas POST_BUILD
+      COMMAND
+        python3 ${CMAKE_CURRENT_SOURCE_DIR}/merge_archives.py
+      ARGS
+        -v
+        -o "$<TARGET_LINKER_FILE:rocblas>"
+        --ar "${CMAKE_AR}"
+        -L "${TensileHost_LIBDIR}"
+        "$<TARGET_LINKER_FILE:rocblas>"
+        "librocblas-tensile.a"
+      WORKING_DIRECTORY "${PROJECT_BINARY_DIR}"
+      COMMENT "Merging rocblas-tensile library into rocblas"
+      )
+  endif()
+
 endif( )
 
 ############################################################
 # Installation
+
+# Force installation of .f90 module file
+install(FILES "rocblas_module.f90"
+        DESTINATION "rocblas/include"
+)
 
 rocm_install_targets(
   TARGETS ${package_targets}
@@ -378,12 +530,33 @@ endif()
 
 #         PERMISSIONS OWNER_EXECUTE OWNER_WRITE OWNER_READ GROUP_EXECUTE GROUP_READ WORLD_EXECUTE WORLD_READ
 
-rocm_export_targets(
-  TARGETS roc::rocblas
-  PREFIX rocblas
-  DEPENDS PACKAGE hip
-  NAMESPACE roc::
- )
+if( BUILD_SHARED_LIBS )
+  rocm_export_targets(
+    TARGETS roc::rocblas
+    PREFIX rocblas
+    DEPENDS PACKAGE hip
+    NAMESPACE roc::
+    )
+else()
+  if (${Tensile_LIBRARY_FORMAT} STREQUAL "msgpack")
+    rocm_export_targets(
+      TARGETS roc::rocblas
+      PREFIX rocblas
+      DEPENDS PACKAGE hip
+      STATIC_DEPENDS PACKAGE msgpack
+      NAMESPACE roc::
+      )
+  else()
+    rocm_export_targets(
+      TARGETS roc::rocblas
+      PREFIX rocblas
+      DEPENDS PACKAGE hip
+      STATIC_DEPENDS PACKAGE LLVM
+      NAMESPACE roc::
+      )
+  endif()
+endif()
+
 
 rocm_install_symlink_subdir( rocblas )
 

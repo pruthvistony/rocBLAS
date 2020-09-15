@@ -8,7 +8,6 @@
 #define __TRTRI_TRSM_HPP__
 
 #include "gemm.hpp"
-#include "handle.h"
 #include "rocblas_trtri.hpp"
 
 static constexpr rocblas_int ROCBLAS_TRTRI_NB = 16;
@@ -110,6 +109,9 @@ rocblas_status rocblas_trtri_trsm_template(rocblas_handle   handle,
     // Quick return if possible.
     if(!n)
         return rocblas_status_success;
+
+    // Temporarily change the thread's default device ID to the handle's device ID
+    auto saved_device_id = handle->push_device_id();
 
     rocblas_status status;
 

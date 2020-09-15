@@ -190,7 +190,9 @@ static bool function_filter(const Arguments& arg)
 ```
  `static std::string name_suffix(const Arguments& arg)` returns a string which will be used as the Google Test name's suffix. It will provide an alphanumeric representation of the test's arguments.
 
-The `RocBLAS_TestName` helper class template should be used to create the name. It accepts ostream output (like `std::cout`), and can be automatically converted to `std::string` after all of the text of the name has been streamed to it.
+The `RocBLAS_TestName` helper class template should be used to create the name. It accepts ostream output, and can be automatically converted to `std::string` after all of the text of the name has been streamed to it.
+
+The `RocBLAS_TestName` helper class constructor accepts a string argument which will be included in the test name. It is generally passed the `Arguments` structure's `name` member.
 
 The `RocBLAS_TestName` helper class template should be passed the name of this test implementation class (including any implicit template arguments) as a template argument, so that every instantiation of this test implementation class creates a unique instantiation of `RocBLAS_TestName`. `RocBLAS_TestName` has some static data which needs to be kept local to each test.
 
@@ -201,14 +203,14 @@ The `RocBLAS_TestName` helper class template should be passed the name of this t
 static std::string name_suffix(const Arguments& arg)
 {
     // Okay: rvalue RocBLAS_TestName object streamed to and returned
-    return RocBLAS_TestName<syr>() << rocblas_datatype2string(arg.a_type)
+    return RocBLAS_TestName<syr>(arg.name) << rocblas_datatype2string(arg.a_type)
         << '_' << (char) std::toupper(arg.uplo) << '_' << arg.N
         << '_' << arg.alpha << '_' << arg.incx << '_' << arg.lda;
 }
 
 static std::string name_suffix(const Arguments& arg)
 {
-    RocBLAS_TestName<gemm_test_template> name;
+    RocBLAS_TestName<gemm_test_template> name(arg.name);
     name << rocblas_datatype2string(arg.a_type);
     if(GEMM_TYPE == GEMM_EX || GEMM_TYPE == GEMM_STRIDED_BATCHED_EX)
         name << rocblas_datatype2string(arg.b_type)
@@ -267,7 +269,7 @@ include: blas1_gtest.yaml
 ```cmake
 add_custom_command( OUTPUT "${ROCBLAS_TEST_DATA}"
                     COMMAND ../common/rocblas_gentest.py -I ../include rocblas_gtest.yaml -o "${ROCBLAS_TEST_DATA}"
-                    DEPENDS ../common/rocblas_gentest.py rocblas_gtest.yaml ../include/rocblas_common.yaml known_bugs.yaml blas1_gtest.yaml gemm_gtest.yaml gemm_batched_gtest.yaml gemm_strided_batched_gtest.yaml gemv_gtest.yaml symv_gtest.yaml syr_gtest.yaml ger_gtest.yaml trsm_gtest.yaml trtri_gtest.yaml geam_gtest.yaml set_get_vector_gtest.yaml set_get_matrix_gtest.yaml
+                    DEPENDS ../common/rocblas_gentest.py rocblas_gtest.yaml ../include/rocblas_common.yaml known_bugs.yaml blas1_gtest.yaml gemm_gtest.yaml gemm_batched_gtest.yaml gemm_strided_batched_gtest.yaml gemv_gtest.yaml symv_gtest.yaml syr_gtest.yaml ger_gtest.yaml trsm_gtest.yaml trtri_gtest.yaml geam_gtest.yaml dgmm_gtest.yaml set_get_vector_gtest.yaml set_get_matrix_gtest.yaml
                     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" )
 ```
 **VI.** Add the `.cpp` file to the list of sources for `rocblas-test` in `CMakeLists.txt`. For example:
@@ -285,6 +287,7 @@ set(rocblas_test_source
     syr_gtest.cpp
     symv_gtest.cpp
     geam_gtest.cpp
+    dgmm_gtest.cpp
     trtri_gtest.cpp
    )
 ```

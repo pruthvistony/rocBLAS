@@ -2,10 +2,10 @@
  * Copyright 2016-2020 Advanced Micro Devices, Inc.
  * ************************************************************************ */
 #include "rocblas_trmm.hpp"
-#include "handle.h"
-#include "logging.h"
+#include "handle.hpp"
+#include "logging.hpp"
 #include "rocblas.h"
-#include "utility.h"
+#include "utility.hpp"
 
 namespace
 {
@@ -15,6 +15,10 @@ namespace
     constexpr char rocblas_trmm_name<float>[] = "rocblas_strmm";
     template <>
     constexpr char rocblas_trmm_name<double>[] = "rocblas_dtrmm";
+    template <>
+    constexpr char rocblas_trmm_name<rocblas_float_complex>[] = "rocblas_ctrmm";
+    template <>
+    constexpr char rocblas_trmm_name<rocblas_double_complex>[] = "rocblas_ztrmm";
 
     template <typename T>
     rocblas_status rocblas_trmm_impl(rocblas_handle    handle,
@@ -32,6 +36,23 @@ namespace
     {
         if(!handle)
             return rocblas_status_invalid_handle;
+
+        // gemm based trmm block sizes
+        constexpr rocblas_int RB = 128;
+        constexpr rocblas_int CB = 128;
+
+        // work arrays dt1 and dt2 are used in trmm
+        rocblas_int size_dt1 = RB * CB;
+        rocblas_int size_dt2 = CB * CB;
+
+        size_t dev_bytes = (size_dt1 + size_dt2) * sizeof(T);
+        if(handle->is_device_memory_size_query())
+        {
+            if(m == 0 || n == 0)
+                return rocblas_status_size_unchanged;
+
+            return handle->set_optimal_device_memory_size(dev_bytes);
+        }
 
         auto layer_mode = handle->layer_mode;
         if(layer_mode
@@ -78,7 +99,6 @@ namespace
                               m,
                               "-n",
                               n,
-                              "--alpha",
                               LOG_BENCH_SCALAR_VALUE(alpha),
                               "--lda",
                               lda,
@@ -97,7 +117,7 @@ namespace
                               diag,
                               m,
                               n,
-                              alpha,
+                              log_trace_scalar_value(alpha),
                               a,
                               lda,
                               c,
@@ -133,34 +153,37 @@ namespace
             return rocblas_status_invalid_size;
 
         if(m == 0 || n == 0)
-        {
-            if(handle->is_device_memory_size_query())
-                return rocblas_status_size_unchanged;
-            else
-                return rocblas_status_success;
-        }
+            return rocblas_status_success;
 
         if(!a || !c || !alpha)
             return rocblas_status_invalid_pointer;
-
-        // gemm based trmm block sizes
-        constexpr rocblas_int RB = 128;
-        constexpr rocblas_int CB = 128;
-
-        // work arrays dt1 and dt2 are used in trmm
-        rocblas_int size_dt1 = RB * CB;
-        rocblas_int size_dt2 = CB * CB;
-
-        size_t dev_bytes = (size_dt1 + size_dt2) * sizeof(T);
-        if(handle->is_device_memory_size_query())
-            return handle->set_optimal_device_memory_size(dev_bytes);
 
         auto mem = handle->device_malloc(dev_bytes);
         if(!mem)
             return rocblas_status_memory_error;
 
-        return rocblas_trmm_template<RB, CB, T>(
-            handle, side, uplo, transa, diag, m, n, alpha, a, lda, c, ldc, (T*)mem);
+        rocblas_stride stride_a    = 0;
+        rocblas_stride stride_c    = 0;
+        rocblas_stride stride_mem  = 0;
+        rocblas_int    batch_count = 1;
+
+        return rocblas_trmm_template<false, RB, CB, T>(handle,
+                                                       side,
+                                                       uplo,
+                                                       transa,
+                                                       diag,
+                                                       m,
+                                                       n,
+                                                       alpha,
+                                                       a,
+                                                       lda,
+                                                       stride_a,
+                                                       c,
+                                                       ldc,
+                                                       stride_c,
+                                                       batch_count,
+                                                       (T*)mem,
+                                                       stride_mem);
     }
 
 } // namespace

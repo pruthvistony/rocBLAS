@@ -47,12 +47,12 @@ endif()
 set( rocblas_benchmark_common
       ../common/utility.cpp
       ../common/cblas_interface.cpp
+      ../common/rocblas_arguments.cpp
       ${BLIS_CPP}
       ../common/rocblas_parse_data.cpp
     )
 
 add_executable( rocblas-bench client.cpp ${rocblas_benchmark_common} )
-target_compile_features( rocblas-bench PRIVATE cxx_static_assert cxx_nullptr cxx_auto_type)
 
 if( BUILD_WITH_TENSILE )
     target_compile_definitions( rocblas-bench PRIVATE BUILD_WITH_TENSILE=1 )
@@ -60,24 +60,36 @@ else()
     target_compile_definitions( rocblas-bench PRIVATE BUILD_WITH_TENSILE=0 )
 endif()
 
+target_compile_features( rocblas-bench PRIVATE cxx_static_assert cxx_nullptr cxx_auto_type )
+
 # Internal header includes
 target_include_directories( rocblas-bench
   PRIVATE
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include/blas1>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include/blas2>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include/blas3>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include/blas_ex>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../../library/include>
 )
 
-set( BLIS_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/build/deps/blis/include/blis )
-set( BLIS_LIBRARY ${CMAKE_SOURCE_DIR}/build/deps/blis/lib/libblis.so )
+set( BLIS_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/${BUILD_DIR}/deps/blis/include/blis )
+set( BLIS_LIBRARY ${CMAKE_SOURCE_DIR}/${BUILD_DIR}/deps/blis/lib/libblis.so )
 
 if( OS_ID_rhel OR OS_ID_sles OR OS_ID_centos)
     if( OS_ID_rhel OR OS_ID_centos)
-        if( CXX_VERSION_STRING MATCHES "clang")
-	    set( OPENMP_INCLUDE_DIR /opt/rh/devtoolset-7/root/usr/lib/gcc/x86_64-redhat-linux/7/include )
+        if( EXISTS "/usr/lib/gcc/x86_64-redhat-linux/8/" )
+            set( ROCM_OPENMP_PATH /usr/lib/gcc/x86_64-redhat-linux/8 )
+        else()
+            set( ROCM_OPENMP_PATH /opt/rh/devtoolset-7/root/usr/lib/gcc/x86_64-redhat-linux/7 )
         endif()
+
         # defer OpenMP include as search order must come after clang
-        set( XXX_OPENMP_INCLUDE_DIR /opt/rh/devtoolset-7/root/usr/lib/gcc/x86_64-redhat-linux/7/include )
-        set( OPENMP_LIBRARY /opt/rh/devtoolset-7/root/usr/lib/gcc/x86_64-redhat-linux/7/libgomp.so )
+        set( XXX_OPENMP_INCLUDE_DIR ${ROCM_OPENMP_PATH}/include )
+        set( OPENMP_LIBRARY ${ROCM_OPENMP_PATH}/libgomp.so )
+        if( CXX_VERSION_STRING MATCHES "clang")
+            set( XXX_OPENMP_INCLUDE_DIR ${ROCM_OPENMP_PATH}/include )
+        endif()
     else()
     #SLES
         set( OPENMP_INCLUDE_DIR /usr/lib64/gcc/x86_64-suse-linux/7/include/ )
@@ -85,9 +97,13 @@ if( OS_ID_rhel OR OS_ID_sles OR OS_ID_centos)
     endif()
 
     message(STATUS "RocmPath: ${ROCM_PATH}")
-    if(EXISTS ${ROCM_PATH}/hcc/lib/clang/10.0.0/include/immintrin.h AND CMAKE_CXX_COMPILER MATCHES ".*/hcc$")
+    if(EXISTS ${ROCM_PATH}/llvm/lib/clang/12.0.0/include/immintrin.h AND CMAKE_CXX_COMPILER MATCHES ".*/hcc$|.*/hipcc$" )
+        set( CLANG_INCLUDE_DIR ${ROCM_PATH}/llvm/lib/clang/12.0.0/include )
+    elseif(EXISTS ${ROCM_PATH}/llvm/lib/clang/11.0.0/include/immintrin.h AND CMAKE_CXX_COMPILER MATCHES ".*/hcc$|.*/hipcc$" )
+        set( CLANG_INCLUDE_DIR ${ROCM_PATH}/llvm/lib/clang/11.0.0/include )
+    elseif (EXISTS ${ROCM_PATH}/hcc/lib/clang/10.0.0/include/immintrin.h AND CMAKE_CXX_COMPILER MATCHES ".*/hcc$|.*/hipcc$" )
         set( CLANG_INCLUDE_DIR ${ROCM_PATH}/hcc/lib/clang/10.0.0/include )
-    elseif (EXISTS ${ROCM_PATH}/hcc/lib/clang/9.0.0/include/immintrin.h AND CMAKE_CXX_COMPILER MATCHES ".*/hcc$")
+    elseif (EXISTS ${ROCM_PATH}/hcc/lib/clang/9.0.0/include/immintrin.h AND CMAKE_CXX_COMPILER MATCHES ".*/hcc$|.*/hipcc$")
         set( CLANG_INCLUDE_DIR ${ROCM_PATH}/hcc/lib/clang/9.0.0/include )
     else()
         set( CLANG_INCLUDE_DIR )
@@ -106,9 +122,9 @@ if( OS_ID_rhel OR OS_ID_sles OR OS_ID_centos)
         )
 
     if(LINK_BLIS)
-      target_link_libraries( rocblas-bench PRIVATE ${OPENMP_LIBRARY} ${BLIS_LIBRARY} ${Boost_LIBRARIES} cblas lapack roc::rocblas )
+      target_link_libraries( rocblas-bench PRIVATE rocblas_fortran_client roc::rocblas cblas lapack ${BLIS_LIBRARY} ${Boost_LIBRARIES} ${OPENMP_LIBRARY} )
     else()
-      target_link_libraries( rocblas-bench PRIVATE ${OPENMP_LIBRARY} ${Boost_LIBRARIES} cblas lapack roc::rocblas )
+      target_link_libraries( rocblas-bench PRIVATE rocblas_fortran_client roc::rocblas cblas lapack ${Boost_LIBRARIES} ${OPENMP_LIBRARY} )
     endif()
 else()
     # External header includes included as system files
@@ -122,13 +138,11 @@ else()
     )
 
     if(LINK_BLIS)
-      target_link_libraries( rocblas-bench PRIVATE ${Boost_LIBRARIES} ${BLIS_LIBRARY} cblas lapack roc::rocblas )
+      target_link_libraries( rocblas-bench PRIVATE rocblas_fortran_client roc::rocblas lapack cblas ${BLIS_LIBRARY} ${Boost_LIBRARIES} )
     else()
-      target_link_libraries( rocblas-bench PRIVATE ${Boost_LIBRARIES} cblas lapack roc::rocblas )
+      target_link_libraries( rocblas-bench PRIVATE rocblas_fortran_client roc::rocblas lapack cblas ${Boost_LIBRARIES} )
     endif()
 endif()
-
-get_target_property( HIPHCC_LOCATION hip::hip_hcc IMPORTED_LOCATION_RELEASE )
 
 if( CUDA_FOUND )
   target_include_directories( rocblas-bench
@@ -141,7 +155,7 @@ if( CUDA_FOUND )
 else( )
   # auto set in hip_common.h
   #target_compile_definitions( rocblas-bench PRIVATE __HIP_PLATFORM_HCC__ )
-  target_link_libraries( rocblas-bench PRIVATE ${HIPHCC_LOCATION} )
+  target_link_libraries( rocblas-bench PRIVATE hip::host hip::device )
 endif( )
 
 if( CMAKE_CXX_COMPILER MATCHES ".*/hcc$" )
@@ -155,7 +169,10 @@ elseif( CMAKE_COMPILER_IS_GNUCXX OR CXX_VERSION_STRING MATCHES "clang")
 endif( )
 
 if( CXX_VERSION_STRING MATCHES "clang" )
-  target_link_libraries( rocblas-bench PRIVATE -lpthread -lm -stdlib=libstdc++ ${ROCM_PATH}/lib/libclang_rt.builtins-x86_64.a )
+  target_link_libraries( rocblas-bench PRIVATE -lpthread -lstdc++ -lm )
+  if(OS_ID_rhel OR OS_ID_centos)
+    set(CMAKE_CXX_FLAGS "-isystem ${CLANG_INCLUDE_DIR} -isystem ${XXX_OPENMP_INCLUDE_DIR} ${CMAKE_CXX_FLAGS}")
+  endif( )
 else( )
   if(OS_ID_rhel OR OS_ID_centos)
     set(CMAKE_CXX_FLAGS "-isystem ${CLANG_INCLUDE_DIR} -isystem ${XXX_OPENMP_INCLUDE_DIR} ${CMAKE_CXX_FLAGS}")
@@ -167,3 +184,4 @@ set_target_properties( rocblas-bench PROPERTIES CXX_EXTENSIONS NO )
 set_target_properties( rocblas-bench PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/staging" )
 add_dependencies( rocblas-bench rocblas-common )
 add_subdirectory ( ./perf_script )
+target_compile_definitions( rocblas-bench PRIVATE ROCBLAS_BENCH ROCM_USE_FLOAT16 )

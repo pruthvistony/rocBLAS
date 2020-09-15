@@ -54,7 +54,7 @@ namespace
         // Google Test name suffix based on parameters
         static std::string name_suffix(const Arguments& arg)
         {
-            RocBLAS_TestName<hpr2_template> name;
+            RocBLAS_TestName<hpr2_template> name(arg.name);
 
             name << rocblas_datatype2string(arg.a_type);
 
@@ -75,6 +75,12 @@ namespace
                 if(HPR2_TYPE == HPR2_STRIDED_BATCHED || HPR2_TYPE == HPR2_BATCHED)
                     name << '_' << arg.batch_count;
             }
+
+            if(arg.fortran)
+            {
+                name << "_F";
+            }
+
             return std::move(name);
         }
     };
@@ -99,15 +105,15 @@ namespace
             if(!strcmp(arg.function, "hpr2"))
                 testing_hpr2<T>(arg);
             else if(!strcmp(arg.function, "hpr2_bad_arg"))
-                testing_hpr2_bad_arg<T>();
+                testing_hpr2_bad_arg<T>(arg);
             else if(!strcmp(arg.function, "hpr2_batched"))
                 testing_hpr2_batched<T>(arg);
             else if(!strcmp(arg.function, "hpr2_batched_bad_arg"))
-                testing_hpr2_batched_bad_arg<T>();
+                testing_hpr2_batched_bad_arg<T>(arg);
             else if(!strcmp(arg.function, "hpr2_strided_batched"))
                 testing_hpr2_strided_batched<T>(arg);
             else if(!strcmp(arg.function, "hpr2_strided_batched_bad_arg"))
-                testing_hpr2_strided_batched_bad_arg<T>();
+                testing_hpr2_strided_batched_bad_arg<T>(arg);
             else
                 FAIL() << "Internal error: Test called with unknown function: " << arg.function;
         }

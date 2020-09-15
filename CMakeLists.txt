@@ -3,7 +3,7 @@
 # ########################################################################
 
 # The ROCm platform requires Ubuntu 16.04 or Fedora 24, which has cmake 3.5
-cmake_minimum_required( VERSION 3.5 )
+cmake_minimum_required( VERSION 3.8 )
 
 # We use C++14 features, this will add compile option: -std=c++14
 set( CMAKE_CXX_STANDARD 14 )
@@ -25,9 +25,10 @@ if ( NOT DEFINED CMAKE_Fortran_COMPILER AND NOT DEFINED ENV{FC} )
   set( CMAKE_Fortran_COMPILER  "gfortran" )
 endif()
 
+add_compile_options( -Wno-unused-command-line-argument )
 
-
-project( rocblas LANGUAGES CXX )
+unset(ENV{ROCM_BUILD_ID})
+project( rocblas LANGUAGES CXX Fortran )
 
 set(THREADS_PREFER_PTHREAD_FLAG ON)
 find_package(Threads REQUIRED)
@@ -96,6 +97,7 @@ elseif( CXX_VERSION_STRING MATCHES "nvcc" )
 elseif( CXX_VERSION_STRING MATCHES "HCC" )
   message( STATUS "HCC compiler set; ROCm backend selected [ CXX=/opt/rocm-<ver>/bin/hcc cmake ... ]" )
   set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -hc")
+
 endif( )
 
 # This finds the rocm-cmake project, and installs it if not found
@@ -138,7 +140,7 @@ get_os_id(OS_ID)
 message (STATUS "OS detected is ${OS_ID}")
 
 # Versioning via rocm-cmake
-set ( VERSION_STRING "2.17.0" )
+set ( VERSION_STRING "2.31.0" )
 rocm_setup_version( VERSION ${VERSION_STRING} )
 
 # Append our library helper cmake path and the cmake path for hip (for convenience)
@@ -167,6 +169,7 @@ if( BUILD_WITH_TENSILE )
   set( Tensile_ARCHITECTURE "all" CACHE STRING "Tensile to use which architecture?")
   set( Tensile_CODE_OBJECT_VERSION "V2" CACHE STRING "Tensile code_object_version")
   set( Tensile_COMPILER "hcc" CACHE STRING "Tensile compiler")
+  set( Tensile_LIBRARY_FORMAT "msgpack" CACHE STRING "Tensile library format")
 
   option( Tensile_MERGE_FILES "Tensile to merge kernels and solutions files?" ON )
   option( Tensile_SHORT_FILENAMES "Tensile to use short file names? Use if compiler complains they're too long." OFF )
@@ -177,6 +180,16 @@ if( BUILD_WITH_TENSILE )
   set_property( CACHE Tensile_LOGIC PROPERTY STRINGS asm_full asm_lite asm_miopen hip_lite other )
   set_property( CACHE Tensile_CODE_OBJECT_VERSION PROPERTY STRINGS V2 V3 )
   set_property( CACHE Tensile_COMPILER PROPERTY STRINGS hcc hipcc)
+  set_property( CACHE Tensile_LIBRARY_FORMAT PROPERTY STRINGS msgpack yaml)
+
+  if(Tensile_LIBRARY_FORMAT MATCHES "yaml")
+    option(TENSILE_USE_LLVM      "Use LLVM for parsing config files." ON)
+    option(TENSILE_USE_MSGPACK   "Use msgpack for parsing config files." OFF)
+  else()
+    option(TENSILE_USE_LLVM      "Use LLVM for parsing config files." OFF)
+    option(TENSILE_USE_MSGPACK   "Use msgpack for parsing config files." ON)
+  endif()
+
 
   include(virtualenv)
   if (Tensile_TEST_LOCAL_PATH)
@@ -190,11 +203,12 @@ if( BUILD_WITH_TENSILE )
     virtualenv_install("git+https://github.com/${tensile_fork}/Tensile.git@${tensile_tag}")
     message (STATUS "using GIT Tensile fork=${tensile_fork} from branch=${tensile_tag}")
   endif()
+  message(STATUS "Adding ${VIRTUALENV_HOME_DIR} to CMAKE_PREFIX_PATH")
   list(APPEND CMAKE_PREFIX_PATH ${VIRTUALENV_HOME_DIR})
   if (TENSILE_VERSION)
     find_package(Tensile ${TENSILE_VERSION} EXACT REQUIRED HIP LLVM OpenMP PATHS "${INSTALLED_TENSILE_PATH}")
   else()
-    find_package(Tensile 4.16.0 EXACT REQUIRED HIP LLVM OpenMP PATHS "${INSTALLED_TENSILE_PATH}")
+    find_package(Tensile 4.23.0 EXACT REQUIRED HIP LLVM OpenMP PATHS "${INSTALLED_TENSILE_PATH}")
   endif()
 endif()
 
@@ -203,14 +217,23 @@ if( CMAKE_CXX_COMPILER MATCHES ".*/hcc$" )
   find_package( hcc REQUIRED CONFIG PATHS ${ROCM_PATH} /opt/rocm )
   find_package( hip REQUIRED CONFIG PATHS ${ROCM_PATH} /opt/rocm )
 endif( )
+if( CMAKE_CXX_COMPILER MATCHES ".*/hipcc$" )
+  find_package( hip REQUIRED CONFIG PATHS ${ROCM_PATH} /opt/rocm )
+endif( )
 
 # CMake list of machine targets
-if( Tensile_ARCHITECTURE STREQUAL "all" )
-  set( gpus "gfx803;gfx900;gfx906;gfx908")
+if( Tensile_ARCHITECTURE )
+  if( Tensile_ARCHITECTURE STREQUAL "all" )
+    set( gpus "gfx803;gfx900;gfx906;gfx908")
+  else()
+    set( gpus ${Tensile_ARCHITECTURE})
+  endif()
+  # We must match tensile if architecture is set
+  set( ROCBLAS_GPUS ${gpus} )
 else()
-  set( gpus ${Tensile_ARCHITECTURE})
-endif()
-set( AMDGPU_TARGETS ${gpus} CACHE STRING "List of specific machine types for library to target" )
+  set( ROCBLAS_GPUS ${AMDGPU_TARGETS} )
+endif( )
+message(STATUS "Specific GPU TARGET(s): " ${ROCBLAS_GPUS})
 
 add_subdirectory( library )
 

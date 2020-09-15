@@ -16,9 +16,64 @@
 
 /*
  * ===========================================================================
+ *    Auxiliary
+ * ===========================================================================
+ */
+
+/* \brief byte counts of SET/GET_MATRIX/_ASYNC calls done in pairs for timing */
+template <typename T>
+constexpr double set_get_matrix_gbyte_count(rocblas_int m, rocblas_int n)
+{
+    return (sizeof(T) * m * n * 2.0) / 1e9;
+}
+
+/*
+ * ===========================================================================
  *    level 1 BLAS
  * ===========================================================================
  */
+
+/* \brief byte counts of ASUM */
+template <typename T>
+constexpr double asum_gbyte_count(rocblas_int n)
+{
+    return (sizeof(T) * n) / 1e9;
+}
+
+/* \brief byte counts of AXPY */
+template <typename T>
+constexpr double axpy_gbyte_count(rocblas_int n)
+{
+    return (sizeof(T) * 3.0 * n) / 1e9;
+}
+
+/* \brief byte counts of COPY */
+template <typename T>
+constexpr double copy_gbyte_count(rocblas_int n)
+{
+    return (sizeof(T) * n) / 1e9;
+}
+
+/* \brief byte counts of DOT */
+template <typename T>
+constexpr double dot_gbyte_count(rocblas_int n)
+{
+    return (sizeof(T) * 2.0 * n) / 1e9;
+}
+
+/* \brief byte counts of NRM2 */
+template <typename T>
+constexpr double nrm2_gbyte_count(rocblas_int n)
+{
+    return (sizeof(T) * n) / 1e9;
+}
+
+/* \brief byte counts of SCAL */
+template <typename T>
+constexpr double scal_gbyte_count(rocblas_int n)
+{
+    return (sizeof(T) * 2.0 * n) / 1e9;
+}
 
 /*
  * ===========================================================================
@@ -29,6 +84,20 @@
 inline size_t tri_count(rocblas_int n)
 {
     return size_t(n) * (1 + n) / 2;
+}
+
+/* \brief byte counts of GEMV */
+template <typename T>
+constexpr double gemv_gbyte_count(rocblas_operation transA, rocblas_int m, rocblas_int n)
+{
+    return (sizeof(T) * (m * n + 2 * (transA == rocblas_operation_none ? n : m))) / 1e9;
+}
+
+/* \brief byte counts of GER */
+template <typename T>
+constexpr double ger_gbyte_count(rocblas_int m, rocblas_int n)
+{
+    return (sizeof(T) * (m * n + m + n)) / 1e9;
 }
 
 /* \brief byte counts of HPR */
@@ -86,6 +155,13 @@ template <typename T>
 constexpr double syr2_gbyte_count(rocblas_int n)
 {
     return (sizeof(T) * (tri_count(n) + 2 * n)) / 1e9;
+}
+
+/* \brief byte counts of TPSV */
+template <typename T>
+constexpr double tpsv_gbyte_count(rocblas_int n)
+{
+    return (sizeof(T) * (tri_count(n) + n)) / 1e9;
 }
 
 /*

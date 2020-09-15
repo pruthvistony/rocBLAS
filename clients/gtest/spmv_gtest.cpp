@@ -54,7 +54,7 @@ namespace
         // Google Test name suffix based on parameters
         static std::string name_suffix(const Arguments& arg)
         {
-            RocBLAS_TestName<spmv_template> name;
+            RocBLAS_TestName<spmv_template> name(arg.name);
 
             name << rocblas_datatype2string(arg.a_type);
 
@@ -84,6 +84,12 @@ namespace
                 if(SPMV_TYPE == SPMV_STRIDED_BATCHED || SPMV_TYPE == SPMV_BATCHED)
                     name << '_' << arg.batch_count;
             }
+
+            if(arg.fortran)
+            {
+                name << "_F";
+            }
+
             return std::move(name);
         }
     };
@@ -106,15 +112,15 @@ namespace
             if(!strcmp(arg.function, "spmv"))
                 testing_spmv<T>(arg);
             else if(!strcmp(arg.function, "spmv_bad_arg"))
-                testing_spmv_bad_arg<T>();
+                testing_spmv_bad_arg<T>(arg);
             else if(!strcmp(arg.function, "spmv_batched"))
                 testing_spmv_batched<T>(arg);
             else if(!strcmp(arg.function, "spmv_batched_bad_arg"))
-                testing_spmv_batched_bad_arg<T>();
+                testing_spmv_batched_bad_arg<T>(arg);
             else if(!strcmp(arg.function, "spmv_strided_batched"))
                 testing_spmv_strided_batched<T>(arg);
             else if(!strcmp(arg.function, "spmv_strided_batched_bad_arg"))
-                testing_spmv_strided_batched_bad_arg<T>();
+                testing_spmv_strided_batched_bad_arg<T>(arg);
             else
                 FAIL() << "Internal error: Test called with unknown function: " << arg.function;
         }

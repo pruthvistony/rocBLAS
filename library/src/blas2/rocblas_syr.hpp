@@ -2,7 +2,7 @@
  * Copyright 2016-2020 Advanced Micro Devices, Inc.
  * ************************************************************************ */
 #pragma once
-#include "handle.h"
+#include "handle.hpp"
 #include "rocblas.h"
 
 template <typename T, typename U, typename V, typename W>
@@ -61,20 +61,20 @@ inline rocblas_status rocblas_syr_arg_check(rocblas_fill   uplo,
 }
 
 template <typename T, typename U, typename V, typename W>
-rocblas_status rocblas_syr_template(rocblas_handle handle,
-                                    rocblas_fill   uplo,
-                                    rocblas_int    n,
-                                    U              alpha,
-                                    rocblas_stride stride_alpha,
-                                    V              x,
-                                    rocblas_int    offsetx,
-                                    rocblas_int    incx,
-                                    rocblas_stride stridex,
-                                    W              A,
-                                    rocblas_int    offseta,
-                                    rocblas_int    lda,
-                                    rocblas_stride strideA,
-                                    rocblas_int    batch_count)
+ROCBLAS_EXPORT_NOINLINE rocblas_status rocblas_syr_template(rocblas_handle handle,
+                                                            rocblas_fill   uplo,
+                                                            rocblas_int    n,
+                                                            U              alpha,
+                                                            rocblas_stride stride_alpha,
+                                                            V              x,
+                                                            rocblas_int    offsetx,
+                                                            rocblas_int    incx,
+                                                            rocblas_stride stridex,
+                                                            W              A,
+                                                            rocblas_int    offseta,
+                                                            rocblas_int    lda,
+                                                            rocblas_stride strideA,
+                                                            rocblas_int    batch_count)
 {
     // Quick return
     if(!n || batch_count == 0)
@@ -92,6 +92,9 @@ rocblas_status rocblas_syr_template(rocblas_handle handle,
 
     // in case of negative inc shift pointer to end of data for negative indexing tid*inc
     auto shiftx = incx < 0 ? offsetx - ptrdiff_t(incx) * (n - 1) : offsetx;
+
+    // Temporarily change the thread's default device ID to the handle's device ID
+    auto saved_device_id = handle->push_device_id();
 
     if(rocblas_pointer_mode_device == handle->pointer_mode)
     {

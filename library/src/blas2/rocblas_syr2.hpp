@@ -2,7 +2,7 @@
  * Copyright 2016-2020 Advanced Micro Devices, Inc.
  * ************************************************************************ */
 #pragma once
-#include "handle.h"
+#include "handle.hpp"
 #include "rocblas.h"
 
 template <typename T>
@@ -63,23 +63,23 @@ __global__ void rocblas_syr2_kernel(bool           upper,
  * Where T is the bast type (float or double)
  */
 template <typename TScal, typename TConstPtr, typename TPtr>
-rocblas_status rocblas_syr2_template(rocblas_handle handle,
-                                     rocblas_fill   uplo,
-                                     rocblas_int    n,
-                                     TScal          alpha,
-                                     TConstPtr      x,
-                                     rocblas_int    offset_x,
-                                     rocblas_int    incx,
-                                     rocblas_stride stride_x,
-                                     TConstPtr      y,
-                                     rocblas_int    offset_y,
-                                     rocblas_int    incy,
-                                     rocblas_stride stride_y,
-                                     TPtr           A,
-                                     rocblas_int    lda,
-                                     rocblas_int    offset_A,
-                                     rocblas_stride stride_A,
-                                     rocblas_int    batch_count)
+ROCBLAS_EXPORT_NOINLINE rocblas_status rocblas_syr2_template(rocblas_handle handle,
+                                                             rocblas_fill   uplo,
+                                                             rocblas_int    n,
+                                                             TScal          alpha,
+                                                             TConstPtr      x,
+                                                             rocblas_int    offset_x,
+                                                             rocblas_int    incx,
+                                                             rocblas_stride stride_x,
+                                                             TConstPtr      y,
+                                                             rocblas_int    offset_y,
+                                                             rocblas_int    incy,
+                                                             rocblas_stride stride_y,
+                                                             TPtr           A,
+                                                             rocblas_int    lda,
+                                                             rocblas_int    offset_A,
+                                                             rocblas_stride stride_A,
+                                                             rocblas_int    batch_count)
 {
     // Quick return if possible. Not Argument error
     if(!n || !batch_count)
@@ -96,6 +96,9 @@ rocblas_status rocblas_syr2_template(rocblas_handle handle,
 
     dim3 syr2_grid(blocksX, blocksY, batch_count);
     dim3 syr2_threads(SYR2_DIM_X, SYR2_DIM_Y);
+
+    // Temporarily change the thread's default device ID to the handle's device ID
+    auto saved_device_id = handle->push_device_id();
 
     if(rocblas_pointer_mode_device == handle->pointer_mode)
         hipLaunchKernelGGL((rocblas_syr2_kernel<SYR2_DIM_X, SYR2_DIM_Y>),

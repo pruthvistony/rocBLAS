@@ -2,10 +2,10 @@
  * Copyright 2016-2020 Advanced Micro Devices, Inc.
  * ************************************************************************ */
 #include "rocblas_copy.hpp"
-#include "handle.h"
-#include "logging.h"
+#include "handle.hpp"
+#include "logging.hpp"
 #include "rocblas.h"
-#include "utility.h"
+#include "utility.hpp"
 
 namespace
 {
@@ -48,6 +48,11 @@ namespace
 
         if(layer_mode & rocblas_layer_mode_log_profile)
             log_profile(handle, rocblas_copy_name<T>, "N", n, "incx", incx, "incy", incy);
+
+        if(n <= 0)
+            return rocblas_status_success;
+        if(!x || !y)
+            return rocblas_status_invalid_pointer;
 
         return rocblas_copy_template<false, NB>(handle, n, x, 0, incx, 0, y, 0, incy, 0, 1);
     }

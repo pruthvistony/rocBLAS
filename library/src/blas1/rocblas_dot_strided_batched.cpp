@@ -1,14 +1,15 @@
 /* ************************************************************************
  * Copyright 2016-2020 Advanced Micro Devices, Inc.
  * ************************************************************************ */
-#include "handle.h"
-#include "logging.h"
+#include "handle.hpp"
+#include "logging.hpp"
 #include "rocblas.h"
 #include "rocblas_dot.hpp"
-#include "utility.h"
+#include "utility.hpp"
 
 namespace
 {
+
     // HIP support up to 1024 threads/work itemes per thread block/work group
     // setting to 512 for gfx803.
     constexpr int NB = 512;
@@ -41,75 +42,89 @@ namespace
 
     // allocate workspace inside this API
     template <bool CONJ, typename T, typename T2 = T>
-    rocblas_status rocblas_dot_strided_batched_impl(rocblas_handle handle,
-                                                    rocblas_int    n,
-                                                    const T*       x,
-                                                    rocblas_int    incx,
-                                                    rocblas_stride stridex,
-                                                    const T*       y,
-                                                    rocblas_int    incy,
-                                                    rocblas_stride stridey,
-                                                    rocblas_int    batch_count,
-                                                    T*             results)
+    inline rocblas_status rocblas_dot_strided_batched_impl(rocblas_handle handle,
+                                                           rocblas_int    n,
+                                                           const T*       x,
+                                                           rocblas_int    incx,
+                                                           rocblas_stride stridex,
+                                                           const T*       y,
+                                                           rocblas_int    incy,
+                                                           rocblas_stride stridey,
+                                                           rocblas_int    batch_count,
+                                                           T*             results)
     {
+        static constexpr int WIN = rocblas_dot_WIN<T>();
+
         if(!handle)
             return rocblas_status_invalid_handle;
 
-        if(!handle->is_device_memory_size_query())
+        size_t dev_bytes = rocblas_reduction_kernel_workspace_size<NB * WIN, T2>(n, batch_count);
+        if(handle->is_device_memory_size_query())
         {
-            auto layer_mode = handle->layer_mode;
-            if(layer_mode & rocblas_layer_mode_log_trace)
-                log_trace(handle,
-                          rocblas_dot_strided_batched_name<CONJ, T>,
-                          n,
-                          x,
-                          incx,
-                          stridex,
-                          y,
-                          incy,
-                          stridey,
-                          batch_count);
-
-            if(layer_mode & rocblas_layer_mode_log_bench)
-                log_bench(handle,
-                          "./rocblas-bench -f dot_strided_batched -r",
-                          rocblas_precision_string<T>,
-                          "-n",
-                          n,
-                          "--incx",
-                          incx,
-                          "--stridex",
-                          stridex,
-                          "--incy",
-                          incy,
-                          "--stridey",
-                          stridey,
-                          "--batch_count",
-                          batch_count);
-
-            if(layer_mode & rocblas_layer_mode_log_profile)
-                log_profile(handle,
-                            rocblas_dot_strided_batched_name<CONJ, T>,
-                            "N",
-                            n,
-                            "incx",
-                            incx,
-                            "stridex",
-                            stridex,
-                            "incy",
-                            incy,
-                            "stridey",
-                            stridey,
-                            "batch_count",
-                            batch_count);
+            if(n <= 0 || batch_count <= 0)
+                return rocblas_status_size_unchanged;
+            else
+                return handle->set_optimal_device_memory_size(dev_bytes);
         }
 
-        if(batch_count < 0)
-            return rocblas_status_invalid_size;
+        auto layer_mode = handle->layer_mode;
+        if(layer_mode & rocblas_layer_mode_log_trace)
+            log_trace(handle,
+                      rocblas_dot_strided_batched_name<CONJ, T>,
+                      n,
+                      x,
+                      incx,
+                      stridex,
+                      y,
+                      incy,
+                      stridey,
+                      batch_count);
 
-        size_t dev_bytes = rocblas_reduction_kernel_workspace_size<NB, T2>(n, batch_count);
-        if(handle->is_device_memory_size_query())
-            return handle->set_optimal_device_memory_size(dev_bytes);
+        if(layer_mode & rocblas_layer_mode_log_bench)
+            log_bench(handle,
+                      "./rocblas-bench -f dot_strided_batched -r",
+                      rocblas_precision_string<T>,
+                      "-n",
+                      n,
+                      "--incx",
+                      incx,
+                      "--stridex",
+                      stridex,
+                      "--incy",
+                      incy,
+                      "--stridey",
+                      stridey,
+                      "--batch_count",
+                      batch_count);
+
+        if(layer_mode & rocblas_layer_mode_log_profile)
+            log_profile(handle,
+                        rocblas_dot_strided_batched_name<CONJ, T>,
+                        "N",
+                        n,
+                        "incx",
+                        incx,
+                        "stridex",
+                        stridex,
+                        "incy",
+                        incy,
+                        "stridey",
+                        stridey,
+                        "batch_count",
+                        batch_count);
+
+        // Quick return if possible.
+        if(n <= 0 || batch_count <= 0)
+        {
+            if(!results)
+                return rocblas_status_invalid_pointer;
+            if(rocblas_pointer_mode_device == handle->pointer_mode)
+                RETURN_IF_HIP_ERROR(
+                    hipMemsetAsync(results, 0, sizeof(*results), handle->rocblas_stream));
+            else
+                *results = T(0);
+            return rocblas_status_success;
+        }
 
         if(!x || !y || !results)
             return rocblas_status_invalid_pointer;

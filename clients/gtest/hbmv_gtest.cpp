@@ -53,7 +53,7 @@ namespace
         // Google Test name suffix based on parameters
         static std::string name_suffix(const Arguments& arg)
         {
-            RocBLAS_TestName<hbmv_template> name;
+            RocBLAS_TestName<hbmv_template> name(arg.name);
 
             name << rocblas_datatype2string(arg.a_type) << '_' << (char)std::toupper(arg.uplo)
                  << '_' << arg.N << '_' << arg.K << '_' << arg.alpha << '_' << arg.lda;
@@ -74,12 +74,17 @@ namespace
             if(HBMV_TYPE == HBMV_STRIDED_BATCHED || HBMV_TYPE == HBMV_BATCHED)
                 name << '_' << arg.batch_count;
 
+            if(arg.fortran)
+            {
+                name << "_F";
+            }
+
             return std::move(name);
         }
     };
 
     // By default, arbitrary type combinations are invalid.
-    // The unnamed second parameter is used for enable_if below.
+    // The unnamed second parameter is used for enable_if_t below.
     template <typename, typename = void>
     struct hbmv_testing : rocblas_test_invalid
     {
